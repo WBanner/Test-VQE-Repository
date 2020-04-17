@@ -140,44 +140,58 @@ class ADAPTVQEROTO(ADAPTVQE):
         energy = temporary_VQE._energy_evaluation(parameter_value_list)# make sure to only take 1st item of array for now as _energy_evaluatio returns array of mean energies, entry for each "parameter set"
         return energy
 
-    def find_optim_param_energy(self) -> dict:
+    def find_optim_param_energy(self,preferred_op = None,preferred_op_mode = False) -> dict:
         #will need to see if faster sequential or parallel
-
-        args = tuple(self._current_operator_list)
+       	args = tuple(self._current_operator_list)
         kwargs = {'initial state': self.initial_state}
-        var_form_list = list(parallel_map(
-            ROTO_variational_form,
-            self.operator_pool.pool,
-            args,
-            kwargs,
-            num_processes=aqua_globals.num_processes #https://github.com/Qiskit/qiskit-aqua/pull/635
-        ))  # type: List[variational_form] outputs list of variational form objects to be used as test ansatz's, one for each new possible operator
+        if preferred_op_mode:
+            var_form_list = ROTO_variational_form(preferred_op, *args, **kwargs)
+        else:
+            var_form_list = list(parallel_map(
+                ROTO_variational_form,
+                self.operator_pool.pool,
+                args,
+                kwargs,
+                num_processes=aqua_globals.num_processes #https://github.com/Qiskit/qiskit-aqua/pull/635
+            ))  # type: List[variational_form] outputs list of variational form objects to be used as test ansatz's, one for each new possible operator
         curr_params = self.adapt_step_history['optimal_parameters']
         Optim_energy_array = []
         Optim_param_array = []
-        Energy_0_array = []
-        Energy_pi4_array = []
-        Energy_negpi4_array = []
+        A = []
+        B = []
+        C = []
+        Energy_0 = 0
+        Energy_pi4 = 0
+        Energy_negpi4 = 0
         if var_form_list:
             for i,form in enumerate(var_form_list): #use the ROTO optimization alg to find optim param, measure to find optimal energy.
                 curr_params.append(0) #be careful with param def, use pi/4 instead of pi/2 bc benedetti define param = theta/2 and theta = pi/2
-                Energy_0_array.append(self._test_energy_evaluation(form, *curr_params))
+                Energy_0 = self._test_energy_evaluation(form, *curr_params)
                 del curr_params[-1]
                 curr_params.append(np.pi/4)
-                Energy_pi4_array.append(self._test_energy_evaluation(form, *curr_params))
+                Energy_pi4 = self._test_energy_evaluation(form, *curr_params)
                 del curr_params[-1]
                 curr_params.append(-np.pi/4)
-                Energy_negpi4_array.append(self._test_energy_evaluation(form, *curr_params))
+                Energy_negpi4 = self._test_energy_evaluation(form, *curr_params)
                 del curr_params[-1]
-                new_param = -np.pi/4 - np.arctan2((2*Energy_0_array[-1] - Energy_pi4_array[-1] - Energy_negpi4_array[-1]),(Energy_pi4_array[-1] - Energy_negpi4_array[-1]))/2
+                #-B = -np.pi/2 - np.arctan2((2*Energy_negpi4 - Energy_negpi2 - Energy_0,(Energy_negpi2 - Energy_0)))
+                B.append(np.arctan2((2*Energy_0 - Energy_negpi4 - Energy_pi4),(Energy_pi4 - Energy_negpi4)))
+                new_param = (-B[-1] - np.pi/2)/2
                 #if new_param >= np.pi:
                  #   new_param = new_param - 2*np.pi
                 #if new_param < -np.pi:
                  #   new_param = new_param + 2*np.pi
                 Optim_param_array.append(new_param)
-                curr_params.append(new_param)
-                Optim_energy = self._test_energy_evaluation(form, *curr_params)
-                del curr_params[-1]
+                Y = np.sin(np.pi/2 + B[-1])
+                X = np.sin(B[-1])
+                Z = np.sin(-np.pi/2 + B[-1])
+                if Y != 0:
+                    C.append((Energy_0-Energy_pi4*(X/Y))/(1-X/Y))
+                    A.append((Energy_pi4 - C[-1])/Y)
+                else:
+                    C.append(Energy_pi4)
+                    A.append((Energy_0 - C[-1])/X)
+                Optim_energy = C[-1] - A[-1]
                 Optim_energy_array.append(Optim_energy)
                 self.adapt_step_history['Total num evals'] += 4
             Optim_param_pos = np.argmin(Optim_energy_array)
@@ -190,7 +204,8 @@ class ADAPTVQEROTO(ADAPTVQE):
             Optim_param = None
             Optim_operator = None
             Optim_operator_name = None
-        return {'Newly Minimized Energy': min_energy, 'Next Parameter value': Optim_param, 'Next Operator identity': Optim_operator, 'Next Operator Name': Optim_operator_namey[Optim_param_pos]}
+        return {'Newly Minimized Energy': min_energy, 'Next Parameter value': Optim_param, 
+         'Next Operator identity': Optim_operator, 'Next Operator Name': Optim_operator_name, "A": A[Optim_param_pos], "B": B[Optim_param_pos], "C": C[Optim_param_pos]}
     def recent_energy_step(self):
         return abs(self.adapt_step_history['energy_history'][-1] - self.adapt_step_history['energy_history'][-2])
         #Our new run function, this will take time to edit
