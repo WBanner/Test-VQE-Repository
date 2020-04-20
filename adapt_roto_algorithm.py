@@ -140,12 +140,13 @@ class ADAPTVQEROTO(ADAPTVQE):
         energy = temporary_VQE._energy_evaluation(parameter_value_list)# make sure to only take 1st item of array for now as _energy_evaluatio returns array of mean energies, entry for each "parameter set"
         return energy
 
-    def find_optim_param_energy(self,preferred_op = None,preferred_op_mode = False) -> dict:
+    def find_optim_param_energy(self, preferred_op = None, preferred_op_mode = False) -> dict:
         #will need to see if faster sequential or parallel
        	args = tuple(self._current_operator_list)
         kwargs = {'initial state': self.initial_state}
         if preferred_op_mode:
-            var_form_list = ROTO_variational_form(preferred_op, *args, **kwargs)
+            var_form_list = []
+            var_form_list.append(ROTO_variational_form(preferred_op, *args, **kwargs))
         else:
             var_form_list = list(parallel_map(
                 ROTO_variational_form,
@@ -174,16 +175,11 @@ class ADAPTVQEROTO(ADAPTVQE):
                 curr_params.append(-np.pi/4)
                 Energy_negpi4 = self._test_energy_evaluation(form, *curr_params)
                 del curr_params[-1]
-                #-B = -np.pi/2 - np.arctan2((2*Energy_negpi4 - Energy_negpi2 - Energy_0,(Energy_negpi2 - Energy_0)))
                 B.append(np.arctan2((2*Energy_0 - Energy_negpi4 - Energy_pi4),(Energy_pi4 - Energy_negpi4)))
                 new_param = (-B[-1] - np.pi/2)/2
-                #if new_param >= np.pi:
-                 #   new_param = new_param - 2*np.pi
-                #if new_param < -np.pi:
-                 #   new_param = new_param + 2*np.pi
                 Optim_param_array.append(new_param)
-                Y = np.sin(np.pi/2 + B[-1])
                 X = np.sin(B[-1])
+                Y = np.sin(np.pi/2 + B[-1])
                 Z = np.sin(-np.pi/2 + B[-1])
                 if Y != 0:
                     C.append((Energy_0-Energy_pi4*(X/Y))/(1-X/Y))
@@ -205,7 +201,7 @@ class ADAPTVQEROTO(ADAPTVQE):
             Optim_operator = None
             Optim_operator_name = None
         return {'Newly Minimized Energy': min_energy, 'Next Parameter value': Optim_param, 
-         'Next Operator identity': Optim_operator, 'Next Operator Name': Optim_operator_name, "A": A[Optim_param_pos], "B": B[Optim_param_pos], "C": C[Optim_param_pos]}
+         'Next Operator identity': Optim_operator, 'Next Operator Name': Optim_operator_name, 'A': A[Optim_param_pos], 'B': B[Optim_param_pos], 'C': C[Optim_param_pos]}
     def recent_energy_step(self):
         return abs(self.adapt_step_history['energy_history'][-1] - self.adapt_step_history['energy_history'][-2])
         #Our new run function, this will take time to edit
@@ -248,3 +244,75 @@ class ADAPTVQEROTO(ADAPTVQE):
         eval_time = time.time() - start
         self.adapt_step_history['Total Eval Time'] = eval_time
         return self.adapt_step_history #return final minimized energy list
+
+
+        #This is a test to do 2 parameter optimization/parameter space mapping and min value estimation.
+class ROTOEXTENDED(ADAPTVQEROTO):
+        def __init__(
+            self,
+            operator_pool,
+            initial_state,
+            vqe_optimizer,
+            hamiltonian,
+            max_iters,
+            auto_conversion=True,
+            use_zero_initial_parameters=False
+        ):
+	        super().__init__(
+	            operator_pool,
+	            initial_state,
+	            vqe_optimizer,
+	            hamiltonian,
+	            max_iters,
+	            energy_step_tol= 1e-5,
+	            auto_conversion=True,
+	            use_zero_initial_parameters=False
+	        )
+
+        def run(self, quantum_instance):
+            start = time.time()
+            self._current_operator_list = []
+            self._quantum_instance = quantum_instance
+            A_list = []
+            B_list = []
+            C_list = []
+            loc_list = [-np.pi/4, 0, np.pi/4]
+            while self.adapt_step_history['Total number energy iterations'] <= 1:
+                New_minimizing_data = self.find_optim_param_energy()
+                self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
+                self.adapt_step_history['optimal_parameters'].append(New_minimizing_data['Next Parameter value'])
+                self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
+                self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
+                self.adapt_step_history['Total number energy iterations'] += 1
+
+            final_op = copy.deepcopy(self._current_operator_list[-1])
+            del self._current_operator_list[-1]
+            opt_param_1 = self.adapt_step_history['optimal_parameters'][-2]
+            opt_param_2 = self.adapt_step_history['optimal_parameters'][-1]
+            del self.adapt_step_history['optimal_parameters'][-1]
+
+            for location in loc_list:
+	            self.adapt_step_history['optimal_parameters'][-1] = location
+	            loc_data = self.find_optim_param_energy(final_op, True)
+	            A_list.append(loc_data['A'])
+	            B_list.append(loc_data['B'])
+	            C_list.append(loc_data['C'])
+
+            self._current_operator_list.append(final_op)
+            self.adapt_step_history['optimal_parameters'].append(opt_param_2)
+            self.adapt_step_history['optimal_parameters'][-2] = opt_param_1
+
+            #now need to reconstruct 2D parameter space from these equations
+            #I can do it but it's gross, can get eqs for X,Y,Z in terms of p2 for E = Xsin(p1 + Y) + Z
+            #need to find where Z-X is at a minimum. X always positive fyi and it's easy to tell where Z is pos and neg (if occurs)
+            #only need 4 additional measurements to get Z fyi, thouh +1 to get the optimum 1st param
+            #we could look at new choice criteria - where Z minimized, not sure how complicated for 3 or more params
+            #could look at Y variation, if Y varies little then ADAPT should be good.
+            #Unfortunately Y takes all 6 additional measurements.
+
+            eval_time = time.time() - start
+            self.adapt_step_history['Total Eval Time'] = eval_time
+            self.adapt_step_history.update({'A': A_list})
+            self.adapt_step_history.update({'B': B_list})
+            self.adapt_step_history.update({'C': C_list})
+            return self.adapt_step_history
