@@ -98,7 +98,8 @@ class ADAPTVQEROTO(ADAPTVQE):
             max_iters,
             energy_step_tol= 1e-5,
             auto_conversion=True,
-            use_zero_initial_parameters=False
+            use_zero_initial_parameters=False,
+            postprocessing = False
         ): #most of these params no longer matter, should edit to remove necessity
         self._quantum_instance = None
         super().__init__(operator_pool,
@@ -217,7 +218,10 @@ class ADAPTVQEROTO(ADAPTVQE):
             self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
             self.adapt_step_history['optimal_parameters'].append(New_minimizing_data['Next Parameter value'])
             self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
-            self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
+            if postprocessing:
+                #vqerotorun should be able to use vqe_run, will need to edit george's rotosolve and check kwargs of vqe_run
+            else:
+                self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
             logger.info('Finished ADAPTROTO step {} of maximum {} with energy {}'.format(self.adapt_step_history['Total number energy iterations'], self.max_iters, self.adapt_step_history['energy_history'][-1]))
             self.adapt_step_history['Total number energy iterations'] += 1
 
@@ -232,7 +236,10 @@ class ADAPTVQEROTO(ADAPTVQE):
             self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
             self.adapt_step_history['optimal_parameters'].append(New_minimizing_data['Next Parameter value'])
             self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
-            self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
+            if postprocessing:
+                #vqerotorun
+            else:
+                self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
             logger.info('Finished ADAPTROTO step {} of maximum {} with energy {}'.format(self.adapt_step_history['Total number energy iterations'], self.max_iters, self.adapt_step_history['energy_history'][-1]))
             self.adapt_step_history['Total number energy iterations'] += 1
             if self.recent_energy_step() > self.adapt_step_history['Max Energy Step']:
