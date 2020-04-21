@@ -116,6 +116,7 @@ class ADAPTVQEROTO(ADAPTVQE):
         self.energy_step_tol = energy_step_tol #the stopping criteria for energy step
         self.initial_state = initial_state
         self.hamiltonian = hamiltonian
+        self.postprocessing = postprocessing
 
         if initial_state is None: #creates new initial state if none passed
             self.initial_state = Zero(num_qubits=operator_pool.num_qubits) #Custom(hamiltonian.num_qubits, state='uniform')
@@ -156,7 +157,9 @@ class ADAPTVQEROTO(ADAPTVQE):
                 kwargs,
                 num_processes=aqua_globals.num_processes #https://github.com/Qiskit/qiskit-aqua/pull/635
             ))  # type: List[variational_form] outputs list of variational form objects to be used as test ansatz's, one for each new possible operator
-        curr_params = self.adapt_step_history['optimal_parameters']
+        curr_params = []
+        if self.adapt_step_history['Total number energy iterations'] > 0:
+        	curr_params = self.adapt_step_history['optimal_parameters'][-1]
         Optim_energy_array = []
         Optim_param_array = []
         A = []
@@ -216,10 +219,16 @@ class ADAPTVQEROTO(ADAPTVQE):
             if self.adapt_step_history['Total number energy iterations'] > 1 and New_minimizing_data['Newly Minimized Energy'] > self.adapt_step_history['energy_history'][-1]:
                 break
             self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
-            self.adapt_step_history['optimal_parameters'].append(New_minimizing_data['Next Parameter value'])
+            if self.adapt_step_history['Total number energy iterations'] == 0:
+                self.adapt_step_history['optimal_parameters'].append([New_minimizing_data['Next Parameter value']])
+            else:
+                new_list = self.adapt_step_history['optimal_parameters'][-1] + [New_minimizing_data['Next Parameter value']]
+                self.adapt_step_history['optimal_parameters'].append(new_list)
             self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
-            if postprocessing:
-                #vqerotorun should be able to use vqe_run, will need to edit george's rotosolve and check kwargs of vqe_run
+            if self.postprocessing and self.adapt_step_history['Total number energy iterations'] > 0:
+                vqe_rotosolve_result = self._vqe_run(self._current_operator_list,self.adapt_step_history['optimal_parameters'][-1])
+                self.adapt_step_history['optimal_parameters'].append(vqe_rotosolve_result['optimal_params'])
+                self.adapt_step_history['energy_history'].append(vqe_rotosolve_result['_ret']['energy'])
             else:
                 self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
             logger.info('Finished ADAPTROTO step {} of maximum {} with energy {}'.format(self.adapt_step_history['Total number energy iterations'], self.max_iters, self.adapt_step_history['energy_history'][-1]))
@@ -234,10 +243,12 @@ class ADAPTVQEROTO(ADAPTVQE):
             if New_minimizing_data['Newly Minimized Energy'] > self.adapt_step_history['energy_history'][-1]:
                 break
             self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
-            self.adapt_step_history['optimal_parameters'].append(New_minimizing_data['Next Parameter value'])
+            self.adapt_step_history['optimal_parameters'].append(self.adapt_step_history['optimal_parameters'][-1] + [New_minimizing_data['Next Parameter value']])
             self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
-            if postprocessing:
-                #vqerotorun
+            if self.postprocessing:
+                vqe_rotosolve_result = self._vqe_run(self._current_operator_list, self.adapt_step_history['optimal_parameters'][-1])
+                self.adapt_step_history['optimal_parameters'].append(vqe_rotosolve_result['optimal_params'])
+                self.adapt_step_history['energy_history'].append(vqe_rotosolve_result['_ret']['energy'])
             else:
                 self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
             logger.info('Finished ADAPTROTO step {} of maximum {} with energy {}'.format(self.adapt_step_history['Total number energy iterations'], self.max_iters, self.adapt_step_history['energy_history'][-1]))
