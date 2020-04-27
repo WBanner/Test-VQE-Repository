@@ -87,6 +87,13 @@ def ROTO_variational_form(op, *args, **kwargs):
     vf = ADAPTVariationalForm(op_list, bounds, initial_state)
     return vf
 
+def evaluate_energy(ham, var_form, *args, **kwargs):
+    parameter_value_list = np.array(args)
+    temporary_VQE = VQE(kwargs['ham'], var_form, kwargs['optimizer'], parameter_value_list, kwargs['max_evals_grouped'], kwargs['aux_operators'], None, kwargs['auto_conversion'])
+    temporary_VQE._quantum_instance = kwargs['quantum_instance']
+    energy = temporary_VQE._energy_evaluation(parameter_value_list)
+    return energy
+
 # This is new ADAPTVQEROTO, currently is ADAPT using ROTO, full pseudocode to follow + ADAPT mx ROTO functionality.
 class ADAPTVQEROTO(ADAPTVQE):
     def __init__(
@@ -96,7 +103,7 @@ class ADAPTVQEROTO(ADAPTVQE):
             vqe_optimizer,
             hamiltonian,
             max_iters,
-            energy_step_tol= 1e-5,
+            energy_step_tol= 1e-8,
             auto_conversion=True,
             use_zero_initial_parameters=False,
             postprocessing = False
@@ -139,8 +146,9 @@ class ADAPTVQEROTO(ADAPTVQE):
         parameter_value_list = np.array(args)
         temporary_VQE = VQE(self.hamiltonian, var_form, self.vqe_optimizer, parameter_value_list, self.max_evals_grouped, self.aux_operators, None, self.auto_conversion)
         temporary_VQE._quantum_instance = self._quantum_instance
-        energy = temporary_VQE._energy_evaluation(parameter_value_list)# make sure to only take 1st item of array for now as _energy_evaluatio returns array of mean energies, entry for each "parameter set"
+        energy = temporary_VQE._energy_evaluation(parameter_value_list)
         return energy
+
 
     def find_optim_param_energy(self, preferred_op = None, preferred_op_mode = False) -> dict:
         #will need to see if faster sequential or parallel
@@ -165,14 +173,12 @@ class ADAPTVQEROTO(ADAPTVQE):
         A = []
         B = []
         C = []
-        Energy_0 = 0
-        Energy_pi4 = 0
-        Energy_negpi4 = 0
+        curr_params.append(0) #be careful with param def, use pi/4 instead of pi/2 bc benedetti define param = theta/2 and theta = pi/2
+        var_form = var_form_list[0]
+        kwargs = {'ham': self.hamiltonian, 'optimizer': self.vqe_optimizer, 'max_evals_grouped': self.max_evals_grouped, 'aux_operators': self.aux_operators, 'auto_conversion': self.auto_conversion, 'quantum_instance': self.quantum_instance}
+        Energy_0 = evaluate_energy(var_form, *curr_params, **kwargs) #only need to do this once.
         if var_form_list:
             for i,form in enumerate(var_form_list): #use the ROTO optimization alg to find optim param, measure to find optimal energy.
-                curr_params.append(0) #be careful with param def, use pi/4 instead of pi/2 bc benedetti define param = theta/2 and theta = pi/2
-                Energy_0 = self._test_energy_evaluation(form, *curr_params)
-                del curr_params[-1]
                 curr_params.append(np.pi/4)
                 Energy_pi4 = self._test_energy_evaluation(form, *curr_params)
                 del curr_params[-1]
@@ -193,7 +199,7 @@ class ADAPTVQEROTO(ADAPTVQE):
                     A.append((Energy_0 - C[-1])/X)
                 Optim_energy = C[-1] - A[-1]
                 Optim_energy_array.append(Optim_energy)
-                self.adapt_step_history['Total num evals'] += 4
+                self.adapt_step_history['Total num evals'] += 2
             Optim_param_pos = np.argmin(Optim_energy_array)
             min_energy = Optim_energy_array[Optim_param_pos]
             Optim_param = Optim_param_array[Optim_param_pos]
@@ -216,7 +222,7 @@ class ADAPTVQEROTO(ADAPTVQE):
         while self.adapt_step_history['Total number energy iterations'] <= 1:
             logger.info('Starting ADAPTROTO step {} of maximum {}'.format(self.adapt_step_history['Total number energy iterations'], self.max_iters)) 
             New_minimizing_data = self.find_optim_param_energy()
-            if self.adapt_step_history['Total number energy iterations'] > 1 and New_minimizing_data['Newly Minimized Energy'] > self.adapt_step_history['energy_history'][-1]:
+            if self.adapt_step_history['Total number energy iterations'] > 1: #and New_minimizing_data['Newly Minimized Energy'] > self.adapt_step_history['energy_history'][-1]:
                 break
             self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
             if self.adapt_step_history['Total number energy iterations'] == 0:
@@ -229,19 +235,21 @@ class ADAPTVQEROTO(ADAPTVQE):
                 vqe_rotosolve_result = self._vqe_run(self._current_operator_list,self.adapt_step_history['optimal_parameters'][-1])
                 self.adapt_step_history['optimal_parameters'].append(vqe_rotosolve_result['optimal_params'])
                 self.adapt_step_history['energy_history'].append(vqe_rotosolve_result['_ret']['energy'])
+                self.adapt_step_history['Total num evals'] += vqe_rotosolve_result['_ret']['num_optimizer_evals']
             else:
                 self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
             logger.info('Finished ADAPTROTO step {} of maximum {} with energy {}'.format(self.adapt_step_history['Total number energy iterations'], self.max_iters, self.adapt_step_history['energy_history'][-1]))
             self.adapt_step_history['Total number energy iterations'] += 1
+            print(self.adapt_step_history['Total number energy iterations'])
 
         if self.recent_energy_step() > self.adapt_step_history['Max Energy Step']:
             self.adapt_step_history['Max Energy Step'] = self.recent_energy_step()
 
-        while self.adapt_step_history['Total number energy iterations'] <= self.max_iters and self.recent_energy_step() >= self.energy_step_tol:
+        while self.adapt_step_history['Total number energy iterations'] <= self.max_iters: #and self.recent_energy_step() >= self.energy_step_tol:
             logger.info('Starting ADAPTROTO step {} of maximum {}'.format(self.adapt_step_history['Total number energy iterations'], self.max_iters)) 
             New_minimizing_data = self.find_optim_param_energy()
-            if New_minimizing_data['Newly Minimized Energy'] > self.adapt_step_history['energy_history'][-1]:
-                break
+            #if New_minimizing_data['Newly Minimized Energy'] > self.adapt_step_history['energy_history'][-1]:
+             #   break
             self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
             self.adapt_step_history['optimal_parameters'].append(self.adapt_step_history['optimal_parameters'][-1] + [New_minimizing_data['Next Parameter value']])
             self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
@@ -249,10 +257,12 @@ class ADAPTVQEROTO(ADAPTVQE):
                 vqe_rotosolve_result = self._vqe_run(self._current_operator_list, self.adapt_step_history['optimal_parameters'][-1])
                 self.adapt_step_history['optimal_parameters'].append(vqe_rotosolve_result['optimal_params'])
                 self.adapt_step_history['energy_history'].append(vqe_rotosolve_result['_ret']['energy'])
+                self.adapt_step_history['Total num evals'] += vqe_rotosolve_result['_ret']['num_optimizer_evals']
             else:
                 self.adapt_step_history['energy_history'].append(New_minimizing_data['Newly Minimized Energy'])
             logger.info('Finished ADAPTROTO step {} of maximum {} with energy {}'.format(self.adapt_step_history['Total number energy iterations'], self.max_iters, self.adapt_step_history['energy_history'][-1]))
             self.adapt_step_history['Total number energy iterations'] += 1
+            print(self.adapt_step_history['Total number energy iterations'])
             if self.recent_energy_step() > self.adapt_step_history['Max Energy Step']:
                 self.adapt_step_history['Max Energy Step'] = self.recent_energy_step()
 
