@@ -87,7 +87,7 @@ def ROTO_variational_form(op, *args, **kwargs):
     vf = ADAPTVariationalForm(op_list, bounds, initial_state)
     return vf
 
-def evaluate_energy(ham, var_form, *args, **kwargs):
+def evaluate_energy(var_form, *args, **kwargs):
     parameter_value_list = np.array(args)
     temporary_VQE = VQE(kwargs['ham'], var_form, kwargs['optimizer'], parameter_value_list, kwargs['max_evals_grouped'], kwargs['aux_operators'], None, kwargs['auto_conversion'])
     temporary_VQE._quantum_instance = kwargs['quantum_instance']
@@ -106,7 +106,8 @@ class ADAPTVQEROTO(ADAPTVQE):
             energy_step_tol= 1e-8,
             auto_conversion=True,
             use_zero_initial_parameters=False,
-            postprocessing = False
+            postprocessing = False,
+            include_parameter = True
         ): #most of these params no longer matter, should edit to remove necessity
         self._quantum_instance = None
         super().__init__(operator_pool,
@@ -124,6 +125,7 @@ class ADAPTVQEROTO(ADAPTVQE):
         self.initial_state = initial_state
         self.hamiltonian = hamiltonian
         self.postprocessing = postprocessing
+        self.include_parameter = include_parameter
 
         if initial_state is None: #creates new initial state if none passed
             self.initial_state = Zero(num_qubits=operator_pool.num_qubits) #Custom(hamiltonian.num_qubits, state='uniform')
@@ -139,15 +141,6 @@ class ADAPTVQEROTO(ADAPTVQE):
         #self.adapt_step_history.update({'Total num Evals': 0})
         self.adapt_step_history.update({'Total number energy iterations': 0}) 
         self.adapt_step_history.update({'Max Energy Step': 0})
-
-
-    def _test_energy_evaluation(self, var_form, *args):
-        #we need to evaluate hamiltonian with var form as our wavefunction
-        parameter_value_list = np.array(args)
-        temporary_VQE = VQE(self.hamiltonian, var_form, self.vqe_optimizer, parameter_value_list, self.max_evals_grouped, self.aux_operators, None, self.auto_conversion)
-        temporary_VQE._quantum_instance = self._quantum_instance
-        energy = temporary_VQE._energy_evaluation(parameter_value_list)
-        return energy
 
 
     def find_optim_param_energy(self, preferred_op = None, preferred_op_mode = False) -> dict:
@@ -167,49 +160,56 @@ class ADAPTVQEROTO(ADAPTVQE):
             ))  # type: List[variational_form] outputs list of variational form objects to be used as test ansatz's, one for each new possible operator
         curr_params = []
         if self.adapt_step_history['Total number energy iterations'] > 0:
-        	curr_params = self.adapt_step_history['optimal_parameters'][-1]
-        Optim_energy_array = []
-        Optim_param_array = []
-        A = []
-        B = []
-        C = []
+        	curr_params = list(self.adapt_step_history['optimal_parameters'][-1])
+        A = np.empty(0)
+        C = np.empty(0)
         curr_params.append(0) #be careful with param def, use pi/4 instead of pi/2 bc benedetti define param = theta/2 and theta = pi/2
-        var_form = var_form_list[0]
         kwargs = {'ham': self.hamiltonian, 'optimizer': self.vqe_optimizer, 'max_evals_grouped': self.max_evals_grouped, 'aux_operators': self.aux_operators, 'auto_conversion': self.auto_conversion, 'quantum_instance': self.quantum_instance}
-        Energy_0 = evaluate_energy(var_form, *curr_params, **kwargs) #only need to do this once.
-        if var_form_list:
-            for i,form in enumerate(var_form_list): #use the ROTO optimization alg to find optim param, measure to find optimal energy.
-                curr_params.append(np.pi/4)
-                Energy_pi4 = self._test_energy_evaluation(form, *curr_params)
-                del curr_params[-1]
-                curr_params.append(-np.pi/4)
-                Energy_negpi4 = self._test_energy_evaluation(form, *curr_params)
-                del curr_params[-1]
-                B.append(np.arctan2((2*Energy_0 - Energy_negpi4 - Energy_pi4),(Energy_pi4 - Energy_negpi4)))
-                new_param = (-B[-1] - np.pi/2)/2
-                Optim_param_array.append(new_param)
-                X = np.sin(B[-1])
-                Y = np.sin(np.pi/2 + B[-1])
-                Z = np.sin(-np.pi/2 + B[-1])
-                if Y != 0:
-                    C.append((Energy_0-Energy_pi4*(X/Y))/(1-X/Y))
-                    A.append((Energy_pi4 - C[-1])/Y)
-                else:
-                    C.append(Energy_pi4)
-                    A.append((Energy_0 - C[-1])/X)
-                Optim_energy = C[-1] - A[-1]
-                Optim_energy_array.append(Optim_energy)
-                self.adapt_step_history['Total num evals'] += 2
-            Optim_param_pos = np.argmin(Optim_energy_array)
-            min_energy = Optim_energy_array[Optim_param_pos]
-            Optim_param = Optim_param_array[Optim_param_pos]
-            Optim_operator = self.operator_pool.pool[Optim_param_pos]
-            Optim_operator_name = self.operator_pool.pool[Optim_param_pos].print_details()
-        else:
-            min_energy = None
-            Optim_param = None
-            Optim_operator = None
-            Optim_operator_name = None
+        Energy_0 = evaluate_energy(var_form_list[0], *curr_params, **kwargs) #only need to do this once.
+        del curr_params[-1]
+        curr_params.append(np.pi/4)
+        args = tuple(curr_params)
+        Energy_pi4 = np.array(parallel_map(
+            evaluate_energy,
+            var_form_list,
+            args,
+            kwargs,
+            num_processes=aqua_globals.num_processes #https://github.com/Qiskit/qiskit-aqua/pull/635
+        ))
+        del curr_params[-1]
+        curr_params.append(-np.pi/4)
+        args = tuple(curr_params)
+        Energy_negpi4 = np.array(parallel_map(
+            evaluate_energy,
+            var_form_list,
+            args,
+            kwargs,
+            num_processes=aqua_globals.num_processes #https://github.com/Qiskit/qiskit-aqua/pull/635
+        )) 
+        del curr_params[-1]
+        B = np.arctan2(( -Energy_negpi4 - Energy_pi4 + 2*Energy_0),(Energy_pi4 - Energy_negpi4))
+        Optim_param_array = (-B - np.pi/2)/2
+        X = np.sin(B)
+        Y = np.sin(B + np.pi/2)
+        Z = np.sin(B - np.pi/2)
+        for i in range(0,(len(var_form_list) -1)):
+            if Y[i] != 0:
+                C = np.append(C, (Energy_0-Energy_pi4[i]*(X[i]/Y[i]))/(1-X[i]/Y[i]))
+                A = np.append(A, (Energy_pi4[i] - C[-1])/Y[i])
+            else:
+                C = np.append(C, Energy_pi4[i])
+                A = np.append(A, (Energy_0 - C[-1])/X[i])
+        Optim_energy_array = C - A
+        Optim_param_pos = np.argmin(Optim_energy_array)
+        min_energy = Optim_energy_array[Optim_param_pos]
+        Optim_param = Optim_param_array[Optim_param_pos]
+        if min_energy > Energy_0 and abs(Optim_param) < 2e-16:
+            Optim_param = 0
+            min_energy = Energy_0
+        Optim_operator = self.operator_pool.pool[Optim_param_pos]
+        Optim_operator_name = self.operator_pool.pool[Optim_param_pos].print_details()
+        self.adapt_step_history['Total num evals'] += 2*len(var_form_list) + 1
+
         return {'Newly Minimized Energy': min_energy, 'Next Parameter value': Optim_param, 
          'Next Operator identity': Optim_operator, 'Next Operator Name': Optim_operator_name, 'A': A[Optim_param_pos], 'B': B[Optim_param_pos], 'C': C[Optim_param_pos]}
     def recent_energy_step(self):
@@ -225,15 +225,19 @@ class ADAPTVQEROTO(ADAPTVQE):
             if self.adapt_step_history['Total number energy iterations'] > 1: #and New_minimizing_data['Newly Minimized Energy'] > self.adapt_step_history['energy_history'][-1]:
                 break
             self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
-            if self.adapt_step_history['Total number energy iterations'] == 0:
-                self.adapt_step_history['optimal_parameters'].append([New_minimizing_data['Next Parameter value']])
+            if self.include_parameter == True:
+                new_parameter = float(New_minimizing_data['Next Parameter value'])
             else:
-                new_list = self.adapt_step_history['optimal_parameters'][-1] + [New_minimizing_data['Next Parameter value']]
+                new_parameter = 0
+            if self.adapt_step_history['Total number energy iterations'] == 0:
+                self.adapt_step_history['optimal_parameters'].append([new_parameter])
+            else:
+                new_list = self.adapt_step_history['optimal_parameters'][-1] + [new_parameter]
                 self.adapt_step_history['optimal_parameters'].append(new_list)
             self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
             if self.postprocessing and self.adapt_step_history['Total number energy iterations'] > 0:
-                vqe_rotosolve_result = self._vqe_run(self._current_operator_list,self.adapt_step_history['optimal_parameters'][-1])
-                self.adapt_step_history['optimal_parameters'].append(vqe_rotosolve_result['optimal_params'])
+                vqe_rotosolve_result = self._vqe_run(self._current_operator_list,np.array(self.adapt_step_history['optimal_parameters'][-1]))
+                self.adapt_step_history['optimal_parameters'].append(list(vqe_rotosolve_result['optimal_params']))
                 self.adapt_step_history['energy_history'].append(vqe_rotosolve_result['_ret']['energy'])
                 self.adapt_step_history['Total num evals'] += vqe_rotosolve_result['_ret']['num_optimizer_evals']
             else:
@@ -251,11 +255,15 @@ class ADAPTVQEROTO(ADAPTVQE):
             #if New_minimizing_data['Newly Minimized Energy'] > self.adapt_step_history['energy_history'][-1]:
              #   break
             self._current_operator_list.append(New_minimizing_data['Next Operator identity'])
-            self.adapt_step_history['optimal_parameters'].append(self.adapt_step_history['optimal_parameters'][-1] + [New_minimizing_data['Next Parameter value']])
+            if self.include_parameter == True:
+                new_parameter = float(New_minimizing_data['Next Parameter value'])
+            else:
+                new_parameter = 0
+            self.adapt_step_history['optimal_parameters'].append(self.adapt_step_history['optimal_parameters'][-1] + [new_parameter])
             self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
             if self.postprocessing:
-                vqe_rotosolve_result = self._vqe_run(self._current_operator_list, self.adapt_step_history['optimal_parameters'][-1])
-                self.adapt_step_history['optimal_parameters'].append(vqe_rotosolve_result['optimal_params'])
+                vqe_rotosolve_result = self._vqe_run(self._current_operator_list, np.array(self.adapt_step_history['optimal_parameters'][-1]))
+                self.adapt_step_history['optimal_parameters'].append(list(vqe_rotosolve_result['optimal_params']))
                 self.adapt_step_history['energy_history'].append(vqe_rotosolve_result['_ret']['energy'])
                 self.adapt_step_history['Total num evals'] += vqe_rotosolve_result['_ret']['num_optimizer_evals']
             else:
