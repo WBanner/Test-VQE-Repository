@@ -1,3 +1,22 @@
+# -*- coding: utf-8 -*-
+
+# This code is part of Qiskit.
+#
+# (C) Copyright IBM 2018, 2019.
+#
+# This code is licensed under the Apache License, Version 2.0. You may
+# obtain a copy of this license in the LICENSE.txt file in the root directory
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+#
+# Any modifications or derivative works of this code must retain this
+# copyright notice, and modified files need to carry a notice indicating
+# that they have been altered from the originals.
+
+"""
+The Variational Quantum Eigensolver algorithm.
+
+See https://arxiv.org/abs/1304.3061
+"""
 
 import time
 
@@ -48,7 +67,7 @@ from qiskit.aqua.components.optimizers import Optimizer
 from qiskit.aqua.components.variational_forms import VariationalForm
 # Base class for variational forms
 
-from qiskit.aqua.operators import BaseOperator, WeightedPauliOperator
+from qiskit.aqua.operators import BaseOperator, WeightedPauliOperator, MatrixOperator
 # operators class BaseOperator(basis=None, z2_symmetries=None, name=None),
 # weighted pauli class, 2 term list, with weight and operator
 # Baseoperator -
@@ -69,30 +88,87 @@ from .operator_pool import OperatorPool, PauliPool
 from .adapt_algorithm import ADAPTVQE
 #from other file
 
+from qiskit.aqua.operators.op_converter import to_weighted_pauli_operator
+
 logger = logging.getLogger(__name__)
 
-#need new var form for each object as we need _current_operator_list + new op from pool, we'll put this guy through a parallelization
-# current operator list saved as literal list with newest ops at end
-def ROTO_variational_form(op, *args, **kwargs):
-    if args:
-        current_op_list = list(args)
-    else:
-        current_op_list = []
-    if kwargs['initial state'] is not None:
-        initial_state = kwargs['initial state']
-    else:
-        initial_state = None
-    op_list = current_op_list + [op]
-    bounds=[(-np.pi, +np.pi)]*len(op_list)
-    vf = ADAPTVariationalForm(op_list, bounds, initial_state)
-    return vf
 
-def evaluate_energy(var_form, *args, **kwargs):
-    parameter_value_list = np.array(args)
-    temporary_VQE = VQE(kwargs['ham'], var_form, kwargs['optimizer'], parameter_value_list, kwargs['max_evals_grouped'], kwargs['aux_operators'], None, kwargs['auto_conversion'])
-    temporary_VQE._quantum_instance = kwargs['quantum_instance']
-    energy = temporary_VQE._energy_evaluation(parameter_value_list)
-    return energy
+#from George
+def fast_circ_eq(circ_1, circ_2):
+    """Quickly determines if two circuits are equal.
+    Not for general use, this is not equivalent to `circ_1 == circ_2`.
+    This function simply compares the data, since this is sufficient for
+    dropping duplicate circuits in ADAPTVQE.
+
+    Parameters
+    ----------
+    circ_1 : QuantumCircuit
+        First circuit to compare.
+    circ_2 : QuantumCircuit
+        Second circuit to compare.
+
+    Returns
+    -------
+    bool
+        Whether or not the circuits are equal.
+
+    """
+    if len(circ_1._data) != len(circ_2._data):
+        return False
+    data_1 = reversed(circ_1._data)
+    data_2 = reversed(circ_2._data)
+    for d_1, d_2 in zip(data_1, data_2):
+        # i = (op, qubits, other)
+        op_1, q_1, ot_1 = d_1
+        op_2, q_2, ot_2 = d_2
+        if q_1 != q_2:
+            return False
+        if ot_1 != ot_2:
+            return False
+        if op_1 != op_2:
+            return False
+    return True
+
+#from george
+def fast_circuit_inclusion(circ, circ_list):
+    """Quickly determines whether a circuit is included in a list.
+    Not for general use, see `fast_circ_eq`.
+
+    Parameters
+    ----------
+    circ : QuantumCircuit
+        Circuit to check inclusion of.
+    circ_list : List[QuantumCircuit]
+        List where `circ` might be.
+
+    Returns
+    -------
+    bool
+        Whether or not the circuit is in the list, based on `fast_circ_eq`.
+
+    """
+    for c in circ_list:
+        if fast_circ_eq(c, circ):
+            return True
+    return False
+
+def Generate_op(op,*args, **kwargs):
+    parameter = kwargs['parameter']
+    ham = kwargs['ham']
+    energy_step_tol = kwargs['energy_step_tol']
+    mat = np.identity(2**op.num_qubits)
+    Iden = to_weighted_pauli_operator(MatrixOperator(mat)) #creates random hamiltonian from random matrix "mat"
+    #return np.exp(1j*parameter*op)*ham*np.exp(-1j*parameter*op).chop(threshold=energy_step_tol, copy=True)
+    return (np.cos(parameter)*Iden + 1j*np.sin(parameter)*op)*ham*(np.cos(parameter)*Iden - 1j*np.sin(parameter)*op).chop(threshold=energy_step_tol, copy=True)
+
+def _circ_eval(op, **kwargs):
+    return op.construct_evaluation_circuit(**kwargs)
+
+def _compute_energy(op, **kwargs):
+    return op.evaluate_with_result(**kwargs)
+
+def _hash(circ):
+    return hash(str(circ))
 
 # This is new ADAPTVQEROTO, currently is ADAPT using ROTO, full pseudocode to follow + ADAPT mx ROTO functionality.
 class ADAPTVQEROTO(ADAPTVQE):
@@ -122,7 +198,6 @@ class ADAPTVQEROTO(ADAPTVQE):
             use_zero_initial_parameters=False #Make your parameters start at zero before gradient based optimization
         ) #initialization from ADAPTVQE
         self.energy_step_tol = energy_step_tol #the stopping criteria for energy step
-        self.initial_state = initial_state
         self.hamiltonian = hamiltonian
         self.postprocessing = postprocessing
         self.include_parameter = include_parameter
@@ -143,56 +218,96 @@ class ADAPTVQEROTO(ADAPTVQE):
         self.adapt_step_history.update({'Max Energy Step': 0})
 
 
-    def find_optim_param_energy(self, preferred_op = None, preferred_op_mode = False) -> dict:
-        #will need to see if faster sequential or parallel
-       	args = tuple(self._current_operator_list)
-        kwargs = {'initial state': self.initial_state}
-        if preferred_op_mode:
-            var_form_list = []
-            var_form_list.append(ROTO_variational_form(preferred_op, *args, **kwargs))
-        else:
-            var_form_list = list(parallel_map(
-                ROTO_variational_form,
-                self.operator_pool.pool,
-                args,
-                kwargs,
-                num_processes=aqua_globals.num_processes #https://github.com/Qiskit/qiskit-aqua/pull/635
-            ))  # type: List[variational_form] outputs list of variational form objects to be used as test ansatz's, one for each new possible operator
-        curr_params = []
-        if self.adapt_step_history['Total number energy iterations'] > 0:
-        	curr_params = list(self.adapt_step_history['optimal_parameters'][-1])
+    def find_optim_param_energy(self, preferred_op = None, preferred_op_mode = False,  previous_circuit = None) -> dict:
+        """method: find_optim_param_energy
+               finds the optimum operator+parameter pair for the next iteration of the ansatz
+        args: 
+           preferred_op - an operator (weightedpaulioperator) predetermined to be the next operator in the ansatz 
+                           (essentially converts this method to rotosolve instead of rotoselect)
+           preferred_op_mode - a flag (boolean) to choose whether or not preferred op should be used
+        
+        returns:
+           dictionary with: optimal operator, name of optimal operator (for output purposes), optimal parameter,
+                            optimal energy, A, B, and C for Asin(theta + B) + C
+        """
         A = np.empty(0)
         C = np.empty(0)
-        curr_params.append(0) #be careful with param def, use pi/4 instead of pi/2 bc benedetti define param = theta/2 and theta = pi/2
-        kwargs = {'ham': self.hamiltonian, 'optimizer': self.vqe_optimizer, 'max_evals_grouped': self.max_evals_grouped, 'aux_operators': self.aux_operators, 'auto_conversion': self.auto_conversion, 'quantum_instance': self.quantum_instance}
-        Energy_0 = evaluate_energy(var_form_list[0], *curr_params, **kwargs) #only need to do this once.
-        del curr_params[-1]
-        curr_params.append(np.pi/4)
-        args = tuple(curr_params)
-        Energy_pi4 = np.array(parallel_map(
-            evaluate_energy,
-            var_form_list,
+        final_circs = []
+        E_list = []
+        #measure energies (theta = 0, theta = pi/4, theta = -pi/4)
+
+        if(self.adapt_step_history['Total number energy iterations'] == 0):
+            wavefunc = self.initial_state.construct_circuit()
+            Energy_0_circ = self.hamiltonian.construct_evaluation_circuit(wavefunc, True)
+            result = self.quantum_instance.execute(Energy_0_circ)
+            Energy_0 = np.real(self.hamiltonian.evaluate_with_result(result, True)[0])
+            self.adapt_step_history['Total num evals'] += 1
+        else:
+            op_list = self._current_operator_list
+            bounds=[(-np.pi, +np.pi)]*len(op_list)
+            vf = ADAPTVariationalForm(op_list, bounds, self.initial_state)
+            wavefunc = vf.construct_circuit(self.adapt_step_history['optimal_parameters'][-1])
+            Energy_0 = self.adapt_step_history['energy_history'][-1]
+
+        if preferred_op_mode:
+            pool = preferred_op
+        else:
+            pool = self.operator_pool.pool
+
+        args = []
+        kwargs = {'ham': self.hamiltonian, 'energy_step_tol': self.energy_step_tol, 'parameter': np.pi/4}
+        op_list_pi4 = list(parallel_map(
+            Generate_op,
+            pool,
             args,
-            kwargs,
-            num_processes=aqua_globals.num_processes #https://github.com/Qiskit/qiskit-aqua/pull/635
+            kwargs
+            ))
+        kwargs['parameter'] = -np.pi/4
+        op_list_negpi4 = list(parallel_map(
+            Generate_op,
+            self.operator_pool.pool,
+            args,
+            kwargs
+            ))
+
+        op_list = op_list_pi4 + op_list_negpi4
+
+        kwargs = {'statevector_mode': self.quantum_instance.is_statevector}
+        total_evaluation_circuits = list(parallel_map(
+            _circ_eval,
+            op_list,
+            task_kwargs={**kwargs, 'wave_function': wavefunc},
+            num_processes=aqua_globals.num_processes
         ))
-        del curr_params[-1]
-        curr_params.append(-np.pi/4)
-        args = tuple(curr_params)
-        Energy_negpi4 = np.array(parallel_map(
-            evaluate_energy,
-            var_form_list,
-            args,
-            kwargs,
-            num_processes=aqua_globals.num_processes #https://github.com/Qiskit/qiskit-aqua/pull/635
-        )) 
-        del curr_params[-1]
+
+        total_evaluation_circuits = [item for sublist in total_evaluation_circuits for item in sublist]
+        logger.info('Removing duplicate circuits')
+
+        for circ in total_evaluation_circuits:
+            if not fast_circuit_inclusion(circ, final_circs):
+                final_circs.append(circ)
+        result = self.quantum_instance.execute(final_circs)
+
+        Energies = list(parallel_map(
+            _compute_energy,
+            op_list,
+            task_kwargs={**kwargs, 'result': result},
+            num_processes=aqua_globals.num_processes
+            ))
+
+        for entry in Energies:
+            E_list.append(np.real(entry[0]))
+
+        cutoff = int(len(E_list)/2)
+        Energy_pi4 = np.array(E_list[0:cutoff])
+        Energy_negpi4 = np.array(E_list[cutoff:])
+        #calculate minimum energy + A,B, and C from measured energies
         B = np.arctan2(( -Energy_negpi4 - Energy_pi4 + 2*Energy_0),(Energy_pi4 - Energy_negpi4))
         Optim_param_array = (-B - np.pi/2)/2
         X = np.sin(B)
         Y = np.sin(B + np.pi/2)
         Z = np.sin(B - np.pi/2)
-        for i in range(0,(len(var_form_list) -1)):
+        for i in range(0,(len(Energy_negpi4)-1)):
             if Y[i] != 0:
                 C = np.append(C, (Energy_0-Energy_pi4[i]*(X[i]/Y[i]))/(1-X[i]/Y[i]))
                 A = np.append(A, (Energy_pi4[i] - C[-1])/Y[i])
@@ -200,18 +315,27 @@ class ADAPTVQEROTO(ADAPTVQE):
                 C = np.append(C, Energy_pi4[i])
                 A = np.append(A, (Energy_0 - C[-1])/X[i])
         Optim_energy_array = C - A
+        #find minimum energy index
         Optim_param_pos = np.argmin(Optim_energy_array)
         min_energy = Optim_energy_array[Optim_param_pos]
         Optim_param = Optim_param_array[Optim_param_pos]
+
+        #CPU has limit on smallest number to be calculated - looks like its somewhere around 1e-16
+        #manually set this to zero as it should be zero.
         if min_energy > Energy_0 and abs(Optim_param) < 2e-16:
             Optim_param = 0
             min_energy = Energy_0
+
+        #find optimum operator
         Optim_operator = self.operator_pool.pool[Optim_param_pos]
         Optim_operator_name = self.operator_pool.pool[Optim_param_pos].print_details()
-        self.adapt_step_history['Total num evals'] += 2*len(var_form_list) + 1
+
+        #keep track of number of quantum evaluations
+        self.adapt_step_history['Total num evals'] += len(final_circs)
 
         return {'Newly Minimized Energy': min_energy, 'Next Parameter value': Optim_param, 
          'Next Operator identity': Optim_operator, 'Next Operator Name': Optim_operator_name, 'A': A[Optim_param_pos], 'B': B[Optim_param_pos], 'C': C[Optim_param_pos]}
+
     def recent_energy_step(self):
         return abs(self.adapt_step_history['energy_history'][-1] - self.adapt_step_history['energy_history'][-2])
         #Our new run function, this will take time to edit
