@@ -43,9 +43,9 @@ shape = adapt_E_df.shape
 numrows = shape[0]
 
 adapt_roto_E_metadata = {'adapt mean E': [], 'R1 mean E': [], 'R2 mean E': [], 'R3 mean E': [], 'adapt std E': [], 'R1 std E': [], 'R2 std E': [], 'R3 std E': []}
-adapt_roto_op_metadata ={'num ops same adapt R3': [], 'num ops same R1 R2': [], 'num ops same R2 R3':[], }
+adapt_roto_op_metadata ={'num ops same adapt R3': [], 'num ops same R1 R2': [], 'num ops same R2 R3':[], 'basic num ops same adapt R3': [], 'basic num ops same R1 R2': [], 'basic num ops same R2 R3': []}
 adapt_roto_param_metadata = {'mean param dif adapt R3': [], 'mean param dif R1 R2': [], 'mean param dif R2 R3': [], 'std param dif adapt R3': [], 'std param dif R1 R2': [], 'std param dif R2 R3': []}
-adapt_roto_metadata = {'eval time': [], 'num evals': [], 'final energy': [], 'final energy std': [], 'same struct count': [], 'mean param dif': []}
+adapt_roto_metadata = {'mean eval time': [], 'mean num evals': [], 'mean final energy': [], 'mean final energy std': [], 'same struct count': [], 'mean param dif': []}
 
 #update energy dictionary
 adapt_roto_E_metadata['adapt mean E'] = list(adapt_E_df.mean(axis=1))
@@ -69,17 +69,29 @@ R1_R2_param_dif_df = adapt_roto_1_param_df.sub(adapt_roto_2_param_df)
 R2_R3_param_dif_df = adapt_roto_2_param_df.sub(adapt_roto_3_param_df)
 
 for i in range(0,numrows): 
-	if ttable_a.iloc[i].value_counts().shape[0] == 2:
-		adapt_roto_op_metadata['num ops same adapt R3'].append(ttable_a.iloc[i].value_counts().iloc[0])
-		print(ttable_a.iloc[i].value_counts().iloc[0])
+	if len(ttable_a.iloc[i].value_counts()) and ttable_a.iloc[i].value_counts().sort_index(ascending= False).index[0]:
+		adapt_roto_op_metadata['basic num ops same adapt R3'].append(ttable_a.iloc[i].value_counts().sort_index(ascending= False).iloc[0])
+	else:
+		adapt_roto_op_metadata['basic num ops same adapt R3'].append(0)
+	if len(ttable_1.iloc[i].value_counts()) and ttable_1.iloc[i].value_counts().sort_index(ascending= False).index[0]:
+		adapt_roto_op_metadata['basic num ops same R1 R2'].append(ttable_1.iloc[i].value_counts().sort_index(ascending= False).iloc[0])
+	else:
+		adapt_roto_op_metadata['basic num ops same R1 R2'].append(0)
+	if len(ttable_2.iloc[i].value_counts()) and ttable_2.iloc[i].value_counts().sort_index(ascending= False).index[0]:
+		adapt_roto_op_metadata['basic num ops same R2 R3'].append(ttable_2.iloc[i].value_counts().sort_index(ascending= False).iloc[0])
+	else:
+		adapt_roto_op_metadata['basic num ops same R2 R3'].append(0)
+for i in range(0,numrows): 
+	if len(ttable_a.iloc[i].value_counts().index) and ttable_a.iloc[i].value_counts().sort_index(ascending= False).index[0]:
+		adapt_roto_op_metadata['num ops same adapt R3'].append(ttable_a.iloc[i].value_counts().sort_index(ascending= False).iloc[0])
 	else:
 		adapt_roto_op_metadata['num ops same adapt R3'].append(0)
-	if ttable_1.iloc[i].value_counts().shape[0] == 2:
-		adapt_roto_op_metadata['num ops same R1 R2'].append(ttable_1.iloc[i].value_counts().iloc[0])
+	if len(ttable_1.iloc[i].value_counts().index) and ttable_1.iloc[i].value_counts().sort_index(ascending= False).index[0]:
+		adapt_roto_op_metadata['num ops same R1 R2'].append(ttable_1.iloc[i].value_counts().sort_index(ascending= False).iloc[0])
 	else:
 		adapt_roto_op_metadata['num ops same R1 R2'].append(0)
-	if ttable_2.iloc[i].value_counts().shape[0] == 2:
-		adapt_roto_op_metadata['num ops same R2 R3'].append(ttable_2.iloc[i].value_counts().iloc[0])
+	if len(ttable_2.iloc[i].value_counts().index) and ttable_2.iloc[i].value_counts().sort_index(ascending= False).index[0]:
+		adapt_roto_op_metadata['num ops same R2 R3'].append(ttable_2.iloc[i].value_counts().sort_index(ascending= False).iloc[0])
 	else:
 		adapt_roto_op_metadata['num ops same R2 R3'].append(0)
 	if len(list(ttable_a.iloc[i][ttable_a.iloc[i]==False].index)):
@@ -102,25 +114,25 @@ for i in range(0,numrows):
 
 adapt_roto_2_data_dict = {'hamiltonian': [], 'eval time': [], 'num evals': [], 'ansz length': [], 'final energy': []}
 
-adapt_roto_metadata['eval time'].append(adapt_data_df['eval time'].mean())
-adapt_roto_metadata['eval time'].append(adapt_roto_1_data_df['eval time'].mean())
-adapt_roto_metadata['eval time'].append(adapt_roto_2_data_df['eval time'].mean())
-adapt_roto_metadata['eval time'].append(adapt_roto_3_data_df['eval time'].mean())
+adapt_roto_metadata['mean eval time'].append(adapt_data_df['eval time'].mean())
+adapt_roto_metadata['mean eval time'].append(adapt_roto_1_data_df['eval time'].mean())
+adapt_roto_metadata['mean eval time'].append(adapt_roto_2_data_df['eval time'].mean())
+adapt_roto_metadata['mean eval time'].append(adapt_roto_3_data_df['eval time'].mean())
 
-adapt_roto_metadata['num evals'].append(adapt_data_df['num evals'].mean())
-adapt_roto_metadata['num evals'].append(adapt_roto_1_data_df['num evals'].mean())
-adapt_roto_metadata['num evals'].append(adapt_roto_2_data_df['num evals'].mean())
-adapt_roto_metadata['num evals'].append(adapt_roto_3_data_df['num evals'].mean())
+adapt_roto_metadata['mean num evals'].append(adapt_data_df['num evals'].mean())
+adapt_roto_metadata['mean num evals'].append(adapt_roto_1_data_df['num evals'].mean())
+adapt_roto_metadata['mean num evals'].append(adapt_roto_2_data_df['num evals'].mean())
+adapt_roto_metadata['mean num evals'].append(adapt_roto_3_data_df['num evals'].mean())
 
-adapt_roto_metadata['final energy'].append(adapt_data_df['final energy'].mean())
-adapt_roto_metadata['final energy'].append(adapt_roto_1_data_df['final energy'].mean())
-adapt_roto_metadata['final energy'].append(adapt_roto_2_data_df['final energy'].mean())
-adapt_roto_metadata['final energy'].append(adapt_roto_3_data_df['final energy'].mean())
+adapt_roto_metadata['mean final energy'].append(adapt_data_df['final energy'].mean())
+adapt_roto_metadata['mean final energy'].append(adapt_roto_1_data_df['final energy'].mean())
+adapt_roto_metadata['mean final energy'].append(adapt_roto_2_data_df['final energy'].mean())
+adapt_roto_metadata['mean final energy'].append(adapt_roto_3_data_df['final energy'].mean())
 
-adapt_roto_metadata['final energy std'].append(adapt_data_df['final energy'].std())
-adapt_roto_metadata['final energy std'].append(adapt_roto_1_data_df['final energy'].std())
-adapt_roto_metadata['final energy std'].append(adapt_roto_2_data_df['final energy'].std())
-adapt_roto_metadata['final energy std'].append(adapt_roto_3_data_df['final energy'].std())
+adapt_roto_metadata['mean final energy std'].append(adapt_data_df['final energy'].std())
+adapt_roto_metadata['mean final energy std'].append(adapt_roto_1_data_df['final energy'].std())
+adapt_roto_metadata['mean final energy std'].append(adapt_roto_2_data_df['final energy'].std())
+adapt_roto_metadata['mean final energy std'].append(adapt_roto_3_data_df['final energy'].std())
 
 adapt_roto_metadata['same struct count'].append(adapt_roto_op_metadata['num ops same adapt R3'][-1])
 adapt_roto_metadata['same struct count'].append(adapt_roto_op_metadata['num ops same R1 R2'][-1])
