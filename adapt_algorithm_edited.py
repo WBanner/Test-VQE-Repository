@@ -37,6 +37,64 @@ def _compute_grad(op, **kwargs):
 def _commutator(op, hamiltonian=None, gradient_tolerance=None):
     return 1j * (hamiltonian * op - op * hamiltonian).chop(threshold=gradient_tolerance, copy=True)
 
+def fast_circ_eq(circ_1, circ_2):
+    """Quickly determines if two circuits are equal.
+    Not for general use, this is not equivalent to `circ_1 == circ_2`.
+    This function simply compares the data, since this is sufficient for
+    dropping duplicate circuits in ADAPTVQE.
+
+    Parameters
+    ----------
+    circ_1 : QuantumCircuit
+        First circuit to compare.
+    circ_2 : QuantumCircuit
+        Second circuit to compare.
+
+    Returns
+    -------
+    bool
+        Whether or not the circuits are equal.
+
+    """
+    if len(circ_1._data) != len(circ_2._data):
+        return False
+    data_1 = reversed(circ_1._data)
+    data_2 = reversed(circ_2._data)
+    for d_1, d_2 in zip(data_1, data_2):
+        # i = (op, qubits, other)
+        op_1, q_1, ot_1 = d_1
+        op_2, q_2, ot_2 = d_2
+        if q_1 != q_2:
+            return False
+        if ot_1 != ot_2:
+            return False
+        if op_1 != op_2:
+            return False
+    return True
+
+
+def fast_circuit_inclusion(circ, circ_list):
+    """Quickly determines whether a circuit is included in a list.
+    Not for general use, see `fast_circ_eq`.
+
+    Parameters
+    ----------
+    circ : QuantumCircuit
+        Circuit to check inclusion of.
+    circ_list : List[QuantumCircuit]
+        List where `circ` might be.
+
+    Returns
+    -------
+    bool
+        Whether or not the circuit is in the list, based on `fast_circ_eq`.
+
+    """
+    for c in circ_list:
+        if fast_circ_eq(c, circ):
+            return True
+    return False
+
 
 class ADAPTVQE(QuantumAlgorithm):
     CONFIGURATION = {
@@ -116,13 +174,14 @@ class ADAPTVQE(QuantumAlgorithm):
         self.adapt_step_history['energy_history'].append(vqe['_ret']['energy'])
         logger.info('Finished ADAPT step {} of maximum {} with energy {}'.format(1, self.max_iters, vqe['_ret']['energy']))
         iters = 1
-        while self._current_max_grad > self.grad_tol and iters <= self.max_iters:
+        print(iters)
+        while iters <= self.max_iters: #and self._current_max_grad > self.grad_tol: #removed by WillB
             logger.info('Starting ADAPT step {} of maximum {}'.format(iters, self.max_iters))
             circuit = vqe['optimal_circuit']
             params = np.concatenate((vqe['optimal_params'], self._new_param))
             op_list = self._ansatz_operator_list(current_circuit=circuit, current_ops=op_list)
-            if self._current_max_grad < self.grad_tol:
-                break
+            #if self._current_max_grad < self.grad_tol: #removed by willB
+            #    break
             vqe = self._vqe_run(operator_list=op_list, initial_parameters=params)
             self.adapt_step_history['optimal_parameters'].append(vqe['optimal_params'])
             self.adapt_step_history['circuit'].append(vqe['optimal_circuit'])
@@ -133,6 +192,7 @@ class ADAPTVQE(QuantumAlgorithm):
                 'Finished ADAPT step {} of maximum {} with energy {}'.format(iters, self.max_iters,
                                                                              vqe['_ret']['energy']))
             iters += 1
+            print(iters)
         logger.info('Finished final ADAPT step {} of maximum {}, with final energy {}'.format(
             iters,
             self.max_iters,
@@ -149,44 +209,33 @@ class ADAPTVQE(QuantumAlgorithm):
         self.adapt_step_history['Total Eval Time'] = stop_time #added by WillB
         return self.adapt_step_history
 
-    def _compute_gradients(self, circuit: QuantumCircuit) -> np.array:
-        kwargs = {
-            'use_simulator_snapshot_mode': False, #WillB changed "operator" to "snapshot" in this name
-            # is_aer_provider(self.quantum_instance._backend),
-            'statevector_mode': self.quantum_instance.is_statevector
-        }
+    def _compute_gradients(self, circuit: QuantumCircuit) -> List[Tuple[complex, complex]]:
+        kwargs = {'statevector_mode': self.quantum_instance.is_statevector}
         logger.info('Constructing evaluation circuits...')
-        evaluation_circuits = list(parallel_map(
+        total_evaluation_circuits = list(parallel_map(
             _circ_eval,
             self.commutators,
             task_kwargs={**kwargs, 'wave_function': circuit},
             num_processes=aqua_globals.num_processes
-        ))  # type: List[QuantumCircuit]
-        evaluation_circuits = [item for sublist in evaluation_circuits for item in sublist]
-        logger.info('Finished constructing evaluation circuits')
-        logger.info('Hashing circuits...')
-        hashes = list(parallel_map(
-            _hash,
-            evaluation_circuits,
-            num_processes=aqua_globals.num_processes
         ))
-        final_inds = np.unique(hashes, return_index=True)[1]
-        final_circs = [evaluation_circuits[i] for i in final_inds]  # type: List[QuantumCircuit]
-        self.adapt_step_history['Total num evals'] += len(final_circs) #added by WillB
-        logger.info('Completed hashing of circuits and dropping repeated ones')
+        total_evaluation_circuits = [item for sublist in total_evaluation_circuits for item in sublist]
+        logger.info('Removing duplicate circuits')
+        final_circs = []
+        for circ in total_evaluation_circuits:
+            if not fast_circuit_inclusion(circ, final_circs):
+                final_circs.append(circ)
+        logger.info('Finished removing duplicate circuits')
         logger.debug('Executing {} circuits for gradient evaluation...'.format(len(final_circs)))
         result = self.quantum_instance.execute(final_circs)
-
         logger.debug('Computing {} gradients...'.format(len(self.commutators)))
         grads = list(parallel_map(
             _compute_grad,
             self.commutators,
             task_kwargs={**kwargs, 'result': result},
             num_processes=aqua_globals.num_processes
-        ))  # type: List[Tuple[float, float]]
+        ))
+        self.adapt_step_history['Total num evals'] += len(final_circs)
         logger.debug('Computed gradients: {}'.format(grads))
-        self.adapt_step_history['gradient_list'].append(grads)
-
         return [abs(tup[0]) for tup in grads]
 
     @property
@@ -284,7 +333,7 @@ class ADAPTQAOA(ADAPTVQE):
             vqe_optimizer: Optimizer,
             hamiltonian: BaseOperator,
             max_iters: int = 10,
-            grad_tol: float = 1e-3,
+            grad_tol: float = 1e-8,
             max_evals_grouped=1,
             aux_operators=None,
             auto_conversion=True,
