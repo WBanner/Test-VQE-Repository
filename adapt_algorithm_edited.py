@@ -16,8 +16,8 @@ from qiskit.aqua.components.variational_forms import VariationalForm
 from qiskit.aqua.operators import BaseOperator, WeightedPauliOperator
 from qiskit.tools.parallel import parallel_map
 
-from .adapt_variational_form import ADAPTVariationalForm, MixerLayer, CompositeVariationalForm
-from .operator_pool import OperatorPool, PauliPool
+from qisresearch.adapt.adapt_variational_form import ADAPTVariationalForm, MixerLayer, CompositeVariationalForm
+from Operator_pool_new import OperatorPool, PauliPool
 
 logger = logging.getLogger(__name__)
 
