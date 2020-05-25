@@ -79,13 +79,13 @@ from qiskit.tools.parallel import parallel_map
 # Allows for classical parallelization of mapping values to a function
 # https://qiskit.org/documentation/_modules/qiskit/tools/parallel.html \n
 
-from .adapt_variational_form import ADAPTVariationalForm, MixerLayer, CompositeVariationalForm
+from qisresearch.adapt.adapt_variational_form import ADAPTVariationalForm, MixerLayer, CompositeVariationalForm
 # From other file
 
-from .operator_pool import OperatorPool, PauliPool
+from Operator_pool_new import OperatorPool, PauliPool
 # From other file
 
-from .adapt_algorithm import ADAPTVQE
+from adapt_algorithm_edited import ADAPTVQE
 #from other file
 
 from qiskit.aqua.operators.op_converter import to_weighted_pauli_operator
@@ -359,7 +359,7 @@ class ADAPTVQEROTO(ADAPTVQE):
                 new_list = self.adapt_step_history['optimal_parameters'][-1] + [new_parameter]
                 self.adapt_step_history['optimal_parameters'].append(new_list)
             self.adapt_step_history['operators'].append(New_minimizing_data['Next Operator Name'])
-            if self.postprocessing and self.adapt_step_history['Total number energy iterations'] > 0:
+            if self.postprocessing:
                 vqe_rotosolve_result = self._vqe_run(self._current_operator_list,np.array(self.adapt_step_history['optimal_parameters'][-1]))
                 self.adapt_step_history['optimal_parameters'].append(list(vqe_rotosolve_result['optimal_params']))
                 self.adapt_step_history['energy_history'].append(vqe_rotosolve_result['_ret']['energy'])
