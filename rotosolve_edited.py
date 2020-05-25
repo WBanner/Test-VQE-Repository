@@ -38,7 +38,7 @@ class Rotosolve(Optimizer):
     
     def __init__(
         self,
-        min_energy_change = 1e-5,
+        min_energy_change = 1e-4,
         max_steps = 5
     ):
         super().__init__()
@@ -119,11 +119,8 @@ class Rotosolve(Optimizer):
             
             steps += 1
             if len(f_values) >=2  and abs(f_values[-1] - f_values[-2]) < min_energy_change:
-                print('hit energy change wall with steps', steps)
-                print(f_values)
                 converged = True
             if steps >= max_steps:
-                print('hit max steps')
                 converged = True
         
         f_current = f_counter(theta)
@@ -134,106 +131,5 @@ class Rotosolve(Optimizer):
         theta_min = theta_values[min_index]
         
         return theta_min, f_min, f_evals
-
-
-# ## Test
-
-# In[76]:
-
-
-from qiskit.aqua.algorithms import VQE
-from qiskit.providers.aer import Aer
-
-import numpy as np
-import pandas as pd
-import seaborn as sns
-
-from qiskit.aqua.components.variational_forms import RYRZ
-
-from qisresearch.adapt import ADAPTVQE
-from qisresearch.adapt import PauliPool
-from qiskit.aqua.components.optimizers import COBYLA, NELDER_MEAD
-from qiskit.aqua.operators import MatrixOperator
-from qiskit.providers.aer import Aer
-from qiskit.aqua.algorithms import ExactEigensolver
-from qiskit.aqua.operators.op_converter import to_weighted_pauli_operator
-
-
-# In[127]:
-
-
-num_qubits = 2
-
-mat = np.random.uniform(0, 1, size=(2**num_qubits, 2**num_qubits)) + 1j * np.random.uniform(0, 1, size=(2**num_qubits, 2**num_qubits))
-mat = np.conjugate(np.transpose(mat)) + mat
-ham = to_weighted_pauli_operator(MatrixOperator(mat))
-
-
-# In[156]:
-
-
-#optimizer = Rotosolve(max_steps=5)
-optimizer = COBYLA(maxiter=200)
-
-backend = Aer.get_backend('statevector_simulator')
-
-ExactEigensolver(ham).run()['energy']
-
-
-# In[157]:
-
-
-ansatz = RYRZ(num_qubits, depth=3)
-
-
-# In[158]:
-
-
-steps = []
-best_f = 1e10
-def callback(index, pars, mean, std_dev):
-    global best_f
-    if mean <= best_f:
-        best_f = mean
-    steps.append({'index': index, 'mean': mean, 'pars': pars, 'std_dev': std_dev, 'best_f': best_f})
-vqe = VQE(ham, ansatz, optimizer, callback=callback)
-
-
-# In[159]:
-
-
-result = vqe.run(backend)
-
-
-# In[160]:
-
-
-result
-
-
-# In[161]:
-
-
-if type(optimizer) == Rotosolve:
-    df_rotosolve = pd.DataFrame(steps)
-else:
-    df_cobyla = pd.DataFrame(steps)
-
-
-# In[162]:
-
-
-#sns.lineplot(x='index', y='best_f', data=df_rotosolve)
-
-
-# In[163]:
-
-
-#sns.lineplot(x='index', y='best_f', data=df_cobyla)
-
-
-# In[ ]:
-
-
 
 
