@@ -143,6 +143,7 @@ class Classical_VQE(VQE):
 			self.ham_list = ham_list
 			self.nonzero_terms = nonzero_terms
 		self.zero_term = 0*WeightedPauliOperator.from_list(paulis = [Pauli.from_label('I'*self.num_qubits)])
+		self.empt_term = self.zero_term - self.zero_term
 
 	def run(self):
 		"""
@@ -180,12 +181,14 @@ class Classical_VQE(VQE):
 			returns the expecation value of an operator based on the 
 			pre-measured expecation values using the initial condition.
 		"""
-		ham_weight_list, ham_pauli_list, ham_name_list = split_into_paulis(ham)
+		ham_name_list = []
+		for i in range(0,len(ham['p'])):
+			ham_name_list.append(ham['p'][i].print_details()[0:self.num_qubits])
 		Eng = 0
-		for i in range(0,(len(ham_pauli_list))):
+		for i in range(0,(len(ham['p']))):
 			j = base_4_map(ham_name_list[i])
 			if self.expecs['exp vals'][j] != complex(0):
-				Eng = Eng + ham_weight_list[i]*complex(self.expecs['exp vals'][j])
+				Eng = Eng + ham['w'][i]*complex(self.expecs['exp vals'][j])
 		return Eng
 
 	def _evaluate_multi_energy(self, param_list):
@@ -217,23 +220,33 @@ class Classical_VQE(VQE):
 			H_a: a weighted pauli operator of the terms in the passed hamiltonian that anticommute with the passed operator
 			comm: a weighted pauli operator of the commutator [H_a, op]
 		"""
-		ham_weight_list, ham_pauli_list, ham_name_list = split_into_paulis(ham)
-		ham_num_list = create_num_list(ham_name_list)
 		kwargs = {'op_2': op}
-		H_a_op = self.zero_term
-		H_c_op = self.zero_term
-		comm = self.zero_term
+		H_a = {'w': [], 'p': []}
+		H_c = {'w': [], 'p': []}
+		comm = {'w': [], 'p': []}
 		for_time = time.time()
-		for i in range(0,(len(ham_pauli_list))):
-			if does_commute(ham_pauli_list[i], kwargs):
-				H_c_op = ham_pauli_list[i]*ham_weight_list[i] + H_c_op
+		for i in range(0,(len(ham['p']))):
+			if does_commute(ham['p'][i], kwargs):
+				H_c['w'].append(ham['w'][i])
+				H_c['p'].append(ham['p'][i])
 			else:
-				H_a_op = ham_pauli_list[i]*ham_weight_list[i] + H_a_op
-				comm_op = ham_weight_list[i]*find_commutator(ham_pauli_list[i], kwargs) + self.zero_term
-				if comm_op != self.zero_term:
-					comm = comm + comm_op
+				H_a['w'].append(ham['w'][i])
+				H_a['p'].append(ham['p'][i])
+				comm_op = ham['w'][i]*find_commutator(ham['p'][i], kwargs)
+				comm_weight, comm_pauli, comm_name = split_into_paulis(comm_op)
+				comm['w'].append(comm_weight[0])
+				comm['p'].append(comm_pauli[0])
+		if not H_c['w']:
+			H_c['w'] = [0]
+			H_c['p'] = [self.zero_term]
+		if not H_a['w']:
+			H_a['w'] = [0]
+			H_a['p'] = [self.zero_term]
+		if not comm['w']:
+			comm['w'] = [0]
+			comm['p'] = [self.zero_term]
 		for_time = time.time() - for_time
-		return H_c_op, H_a_op, comm, for_time
+		return H_c, H_a, comm, for_time
 
 	def _reconstruct_multi_energy_expression(self):
 		"""
@@ -243,9 +256,9 @@ class Classical_VQE(VQE):
 			nonzero_term list: used to keep track of when terms in the ham_list correspond to which term in the overall energy expression, as empty
 								or zero terms are not included in the ham_list.
 		"""
-		ham_weight_list, ham_pauli_list, ham_name_list = split_into_paulis(self.operator)
-		ham_dict = {'w': ham_weight_list,'p': ham_pauli_list,'n': ham_name_list}
-		ham_list = [self._operator]
+		ham_weight_list, ham_pauli_list, ham_name_list = split_into_paulis(self._operator)
+		ham_dict = {'w': ham_weight_list,'p': ham_pauli_list}
+		ham_list = [ham_dict]
 		nonzero_terms = [1]
 		for_time_sum = 0
 		for num, op in enumerate(self.op_list):
@@ -253,43 +266,16 @@ class Classical_VQE(VQE):
 			for i,ham in enumerate(ham_list[:num_prev_terms]):
 				H_c, H_a, comm, for_time = self._reconstruct_single_energy_expression(op, ham)
 				for_time_sum = for_time_sum + for_time
-				if H_c != self.zero_term:
+				if H_c['p'][0] != self.zero_term:
 					ham_list.append(H_c)
 					nonzero_terms.append(3*(nonzero_terms[i]-1) + 1)
-				if H_a != self.zero_term:
+				if H_a['p'][0] != self.zero_term:
 					ham_list.append(H_a)
 					nonzero_terms.append(3*(nonzero_terms[i]-1) + 2)
-				if comm != self.zero_term:
+				if comm['p'][0] != self.zero_term:
 					ham_list.append(comm)
 					nonzero_terms.append(3*(nonzero_terms[i]-1) + 3)
 			ham_list = ham_list[num_prev_terms:]
 			nonzero_terms = nonzero_terms[num_prev_terms:]
 		print('fortimesum', for_time_sum)
 		return ham_list, nonzero_terms, for_time_sum
-
-		"""
-		kwargs = {'op_2': op}
-		H_a = {'w': [], 'p': [], 'n': []}
-		H_c = {'w': [], 'p': [], 'n': []}
-		comm = {'w': [], 'p': [], 'n': []}
-		for_time = time.time()
-		for i in range(0,(len(ham['p']))):
-			if does_commute(ham['p'], kwargs):
-				H_c['w'].append(ham['w'][i])
-				H_c['p'].append(ham['p'][i])
-			else:
-				H_a['w'].append(ham['w'][i])
-				H_a['p'].append(ham['p'][i])
-				comm_op = ham['w'][i]*find_commutator(ham['p'][i], kwargs)
-				if not isempty(comm_op):
-					H_a['w'].append(ham['w'][i])
-					H_a['p'].append(comm_op)
-		if isempty(H_c['w']):
-			H_c['w'] = [0]
-			H_c['p'] = [self.zero_term]
-		if isempty(H_a['w']):
-			H_a['w'] = [0]
-			H_a['p'] = [self.zero_term]
-		if isempty()
-		for_time = time.time() - for_time
-		return H_c_op, H_a_op, comm, for_time
