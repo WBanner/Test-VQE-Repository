@@ -8,24 +8,32 @@ from qiskit.aqua.algorithms import VQE
 from qiskit.tools import parallel_map
 import time
 from copy import deepcopy
+from qiskit.utils import aqua_globals
 
 def reverse(lst): 
     lst.reverse() 
     return lst
 
-def find_commutator(op_1, kwargs):
+def find_commutator(op_1, args, kwargs):
 	"""
 		finds the commutator of 2 operators
 	"""
 	op_2 = kwargs['op_2']
-	return op_1*op_2 - op_2*op_1
+	return (op_1*op_2 - op_2*op_1)
 
-def does_commute(op_1, kwargs):
-	"""
-		checks if operators commute
-	"""
+def commute_yes(ham, args, kwargs):
 	op_2 = kwargs['op_2']
-	return op_1.commute_with(op_2)
+	if ham.commute_with(op_2):
+		return ham
+	else:
+		return
+
+def commute_no(ham, args, kwargs):
+	op_2 = kwargs['op_2']
+	if not ham.commute_with(op_2):
+		return ham
+	else:
+		return
 
 def reconstruct_single_energy_expression(self, op, ham = None, zero_term):
 		"""
@@ -34,52 +42,79 @@ def reconstruct_single_energy_expression(self, op, ham = None, zero_term):
 			comm: a weighted pauli operator of the commutator [H_a, op]
 		"""
 		kwargs = {'op_2': op}
-		H_a = {'w': [], 'p': []}
-		H_c = {'w': [], 'p': []}
-		comm = {'w': [], 'p': []}
-		for i in range(0,(len(ham['p']))):
-			if does_commute(ham['p'][i], kwargs):
-				H_c['w'].append(ham['w'][i])
-				H_c['p'].append(ham['p'][i])
-			else:
-				H_a['w'].append(ham['w'][i])
-				H_a['p'].append(ham['p'][i])
-				comm_op = ham['w'][i]*find_commutator(ham['p'][i], kwargs)
-				comm_weight, comm_pauli, comm_name = split_into_paulis(comm_op)
-				comm['w'].append(comm_weight[0])
-				comm['p'].append(comm_pauli[0])
-		if not H_c['w']:
-			H_c['w'] = [0]
-			H_c['p'] = [zero_term]
-		if not H_a['w']:
-			H_a['w'] = [0]
-			H_a['p'] = [zero_term]
-		if not comm['w']:
-			comm['w'] = [0]
-			comm['p'] = [zero_term]
+		args = []
+		H_c = parallel_map(commute_yes, ham, args, kwargs)
+		H_a = parallel_map(commute_no, ham, args, kwargs)
+		comm = parallel_map(find_commutator,H_a,args,kwargs)
+
+		if not H_c:
+			H_c.append(zero_term)
+		if not H_a:
+			H_a.append(zero_term)
 		return H_c, H_a, comm
 
-def create_new_ham_list(term_list, op, num, zero_term):
-	ham = term_list[0]
-	nonzero_term = term_list[1]
-	nonzero_terms = []
-	ham_list = []
-	H_c, H_a, comm = self._reconstruct_single_energy_expression(op, ham)
-	if H_c['p'][0] != zero_term:
-		ham_list.append(H_c)
-		nonzero_terms.append(3*(nonzero_term-1) + 1)
-		if tree_flag:
-			tree[num + 1].append(0)
-	if H_a['p'][0] != zero_term:
-		ham_list.append(H_a)
-		nonzero_terms.append(3*(nonzero_term-1) + 2)
-		if tree_flag:
-			tree[num + 1].append(1)
-	if comm['p'][0] != zero_term:
-		ham_list.append(comm)
-		nonzero_terms.append(3*(nonzero_term-1) + 3)
-		if tree_flag:
-			tree[num + 1].append(2)
+
+def create_new_terms(term, zero_term, args):
+	op = args[0]
+	num = args[1]
+	ham = term[0]
+	term_number = term_list[1]
+	new_term_list = []
+	H_c, H_a, comm = reconstruct_single_energy_expression(op, ham, zero_term)
+	if H_c[0] != zero_term:
+		new_ham_list.append([H_c, 3*(term_number-1) + 1])
+	if H_a[0] != zero_term:
+		new_ham_list.append([H_a, 3*(term_number-1) + 2])
+	if comm[0] != zero_term:
+		new_ham_list.append([comm, 3*(term_number-1) + 3])
+
+
+def reconstruct_multi_energy_expression(self, operator, op_list = None, tree = None):
+		"""
+			returns:
+			ham_list: list of nonzero weighted pauli operators. is (typically) an exponentially (with ansatz length)
+						sized list of separate terms. When measured and multiplied by sines and cosines, it can be used to evaluate the energy
+			nonzero_term list: used to keep track of when terms in the ham_list correspond to which term in the overall energy expression, as empty
+								or zero terms are not included in the ham_list.
+		"""
+		#can we take nonzero terms to tree list?
+		ham = split_into_paulis(operator)
+		term_list = [[ham, 1]]
+		for num, op in enumerate(op_list):
+			args = [op, num, self.zero_term]
+			meta_term_list = parallel_map(create_new_term_list, term_list, args)
+			new_term_list = []
+			for term in meta_term_list:
+				new_term_list = new_term_list + term
+			if tree is not None:
+				for term in new_term_list:
+					i = 0
+					if term[1] == 3*(term_list[i] - 1) + 1:
+						tree[num + 1].append(0)
+						i = i + 1
+					if term[1] == 3*(term_list[i] - 1) + 2:
+						tree[num + 1] = tree[num + 1] + [1,2]
+						i = i+2
+
+		if tree is not None:
+			ham_list = parallel_map(return_first_entry, ham_list)
+			return ham_list, tree
+		else:
+			return ham_list, nonzero_terms
+
+
+def sort_term(term, previous_ops_list, op):
+		if does_commute(term['term'], {'op_2': op}):
+	else:
+		descendants_list, term['tree'] = reconstruct_multi_energy_expression(find_commutator(term['term'], {'op_2': op}), previous_ops_list, term['tree'])
+		term['descendants'] = term['descendants'] + descendants_list
+
+def convert_to_wpauli_list(term, args):
+		if term[0] == complex(0):
+			separated_ham = 0*WeightedPauliOperator.from_list(paulis = [Pauli.from_label('I'*num_qubits)])
+		else:
+			separated_ham = WeightedPauliOperator.from_list([term[1]],[term[0]])
+	return separated_ham
 
 
 def split_into_paulis(ham):
@@ -90,36 +125,10 @@ def split_into_paulis(ham):
 					(does not include weights)
 		name_list: a list of strings that correspond to the names of the operators in the hamiltonian
 	"""
-	num_qubits = ham.num_qubits
-	ham_details = ham.print_details()
-	ham_list = ham_details.split('\n')
-	pauli_list = [0]*(len(ham_list)-1) #exclude last entry of ham list bc is just blank
-	name_list = [0]*(len(ham_list)-1)
-	weight_list = [0]*(len(ham_list)-1)
-	if len(ham_list) > 2:
-		for counter in range(0, len(ham_list),1):
-			if ham_list[counter][num_qubits + 2:] == '':
-				break
-			if ham_list[counter][num_qubits + 1:] == '0':
-				name_list[counter] = 'I'*num_qubits
-				weight_list[counter] = complex(0)
-				pauli_list[counter] = 0*WeightedPauliOperator.from_list(paulis = [Pauli.from_label('I'*num_qubits)])
-			else:
-				pauli = Pauli.from_label(ham_list[counter][:num_qubits])
-				name_list[counter] = ham_list[counter][:num_qubits]
-				weight_list[counter] = complex(ham.paulis[counter][0])
-				pauli_list[counter] = WeightedPauliOperator.from_list([pauli])
-	else:
-			if ham_list[0][num_qubits + 1:-1] == '0':
-				name_list[0] = 'I'*num_qubits
-				weight_list[0] = complex(0)
-				pauli_list[0] = 0*WeightedPauliOperator.from_list(paulis = [Pauli.from_label('I'*num_qubits)])
-			else:
-				pauli = Pauli.from_label(ham_list[0][:num_qubits])
-				name_list[0] = ham_list[0][:num_qubits]
-				weight_list[0] = complex(ham.paulis[0][0])
-				pauli_list[0] = WeightedPauliOperator.from_list([pauli])
-	return weight_list, pauli_list, name_list
+	ham_list = ham.paulis
+	separated_ham_list = parallel_map(convert_to_wpauli_list, ham_list, args, num_processes = aqua_globals.num_processes)
+
+	return separated_ham_list
 
 def base_4_map(name):
 	"""
@@ -169,6 +178,28 @@ def ternary (n): #this function taken from stackexchange
 		n, r = divmod(n, 3)
 		nums.append(str(r))
 	return ''.join(reversed(nums))
+
+
+def generate_base_3_list_single_op(term)
+	base_3_list = []
+	two_counter = [0]*len(term['tree'])
+	base_3_grid = reverse(term['tree'][:])
+	for i in range(0,len(base_3_grid[0])):
+		already_added_flag = 0
+		pos = i
+		for gen_num, generation in enumerate(base_3_grid):
+			if gen_num == 0:
+				base_3_list.append(str(generation[i]))
+				if base_3_list[i][0] == '2':
+					already_added_flag = 1
+					two_counter[gen_num] = two_counter[gen_num] + 1
+			else:
+				pos = pos - two_counter[gen_num-1]
+				base_3_list[i] = str(generation[pos]) + base_3_list[i]
+				if base_3_list[i][0] == '2' and not already_added_flag:
+					already_added_flag = 1
+					two_counter[gen_num] = two_counter[gen_num] + 1
+
 
 class Classical_VQE(VQE):
 
@@ -254,10 +285,10 @@ class Classical_VQE(VQE):
 			creates a list of expectation values for the terms in "ham_list"
 		"""
 		energy_list = []
+		args = [self.num_qubits]
 		if self.dir_to_bracket:
 			if len(self.ham_list) > 1:
-				for ham in self.ham_list:
-					energy_list.append(self._evaluate_single_energy(ham))
+					energy_list = parallel_map(evaluate_single_energy, ham, args, num_processes = aqua_globals.num_processes)
 			else:
 				energy_list.append(self._evaluate_single_energy(self.ham_list[0]))
 		else:
@@ -274,11 +305,12 @@ class Classical_VQE(VQE):
 							energy_list.append(0)
 		return energy_list
 
-	def _evaluate_single_energy(self, ham):
+	def _evaluate_single_energy(self, ham, args):
 		"""
 			returns the expecation value of an operator based on the 
 			pre-measured expecation values using the initial condition.
 		"""
+		num_qubits = args[0]
 		ham_name_list = []
 		for i in range(0,len(ham['p'])):
 			ham_name_list.append(ham['p'][i].print_details()[0:self.num_qubits])
@@ -319,89 +351,14 @@ class Classical_VQE(VQE):
 		return np.real(Energy)
 
 
-	def _reconstruct_single_energy_expression(self, op, ham = None):
-		"""
-			H_c: a weighted pauli operator of the terms in the passed hamiltonian that commute with the passed operator
-			H_a: a weighted pauli operator of the terms in the passed hamiltonian that anticommute with the passed operator
-			comm: a weighted pauli operator of the commutator [H_a, op]
-		"""
-		kwargs = {'op_2': op}
-		H_a = {'w': [], 'p': []}
-		H_c = {'w': [], 'p': []}
-		comm = {'w': [], 'p': []}
-		for i in range(0,(len(ham['p']))):
-			if does_commute(ham['p'][i], kwargs):
-				H_c['w'].append(ham['w'][i])
-				H_c['p'].append(ham['p'][i])
-			else:
-				H_a['w'].append(ham['w'][i])
-				H_a['p'].append(ham['p'][i])
-				comm_op = ham['w'][i]*find_commutator(ham['p'][i], kwargs)
-				comm_weight, comm_pauli, comm_name = split_into_paulis(comm_op)
-				comm['w'].append(comm_weight[0])
-				comm['p'].append(comm_pauli[0])
-		if not H_c['w']:
-			H_c['w'] = [0]
-			H_c['p'] = [self.zero_term]
-		if not H_a['w']:
-			H_a['w'] = [0]
-			H_a['p'] = [self.zero_term]
-		if not comm['w']:
-			comm['w'] = [0]
-			comm['p'] = [self.zero_term]
-		return H_c, H_a, comm
-
-	def _reconstruct_multi_energy_expression(self, operator, op_list = None, tree = None):
-		"""
-			returns:
-			ham_list: list of nonzero weighted pauli operators. is (typically) an exponentially (with ansatz length)
-						sized list of separate terms. When measured and multiplied by sines and cosines, it can be used to evaluate the energy
-			nonzero_term list: used to keep track of when terms in the ham_list correspond to which term in the overall energy expression, as empty
-								or zero terms are not included in the ham_list.
-		"""
-		ham_weight_list, ham_pauli_list, ham_name_list = split_into_paulis(operator)
-		ham_dict = {'w': ham_weight_list,'p': ham_pauli_list}
-		ham_list = [ham_dict]
-		nonzero_terms = [1]
-		if tree is not None:
-			tree_flag = 1
-		else:
-			tree_flag = 0
-		for num, op in enumerate(op_list):
-			num_prev_terms = len(ham_list)
-			for i,ham in enumerate(ham_list[:num_prev_terms]):
-				H_c, H_a, comm = self._reconstruct_single_energy_expression(op, ham)
-				if H_c['p'][0] != self.zero_term:
-					ham_list.append(H_c)
-					nonzero_terms.append(3*(nonzero_terms[i]-1) + 1)
-					if tree_flag:
-						tree[num + 1].append(0)
-				if H_a['p'][0] != self.zero_term:
-					ham_list.append(H_a)
-					nonzero_terms.append(3*(nonzero_terms[i]-1) + 2)
-					if tree_flag:
-						tree[num + 1].append(1)
-				if comm['p'][0] != self.zero_term:
-					ham_list.append(comm)
-					nonzero_terms.append(3*(nonzero_terms[i]-1) + 3)
-					if tree_flag:
-						tree[num + 1].append(2)
-			ham_list = ham_list[num_prev_terms:]
-			nonzero_terms = nonzero_terms[num_prev_terms:]
-		if tree_flag:
-			return ham_list, nonzero_terms, tree
-		else:
-			return ham_list, nonzero_terms
-
 	def _reconstruct_op_descendants(self, ham_term_list = None):
 		"""
 
 		"""
 		if ham_term_list == None:
-			ham_weight_list, ham_pauli_list, ham_name_list = split_into_paulis(self._operator)
-			ham_term_list = []
-			for i,term in enumerate(ham_pauli_list):
-				ham_term_list.append({'op': ham_weight_list[i]*term, 'descendants': [ham_weight_list[i]*term], 'tree': []})
+			ham_list= split_into_paulis(self._operator)
+			for term in ham_list:
+				ham_term_list.append({'term': term, 'descendants': [term], 'tree': []})
 		if self.starting_point:
 			op_list = self.op_list[-1]
 		else:
@@ -413,45 +370,15 @@ class Classical_VQE(VQE):
 			else:
 				prev_op_list = self.op_list[:num]
 				
-			for k,term in enumerate(ham_term_list):
-				if does_commute(term['op'], {'op_2': op}):
-					term['tree'].insert(0,[0])
-					print(k)
-				else:
-					term['tree'].insert(0,[1,2])
-					descendants_list, nonzero_terms, term['tree'] = self._reconstruct_multi_energy_expression(find_commutator(term['op'], {'op_2': op}), reverse(self.op_list[:num]), term['tree'])
-					for i in range(0,len(descendants_list)):
-						term['descendants'].append(descendants_list[i]['p'][0]*descendants_list[i]['w'][0])
+			ham_term_list = parallel_map(sort_term, ham_term_list, num_processes = aqua_globals.num_processes)
 		return ham_term_list
 
-	def _generate_base_3_list_single_op(self, term):
-		base_3_list = []
-		two_counter = [0]*len(term['tree'])
-		base_3_grid = reverse(term['tree'][:])
-		for i in range(0,len(base_3_grid[0])):
-			already_added_flag = 0
-			pos = i
-			for gen_num, generation in enumerate(base_3_grid):
-				if gen_num == 0:
-					base_3_list.append(str(generation[i]))
-					if base_3_list[i][0] == '2':
-						already_added_flag = 1
-						two_counter[gen_num] = two_counter[gen_num] + 1
-				else:
-					pos = pos - two_counter[gen_num-1]
-					base_3_list[i] = str(generation[pos]) + base_3_list[i]
-					if base_3_list[i][0] == '2' and not already_added_flag:
-						already_added_flag = 1
-						two_counter[gen_num] = two_counter[gen_num] + 1
-		return base_3_list
 	def _generate_base_3_list(self):
 		base_3_list = []
-		for term in self.ham_term_list:
-			single_list = self._generate_base_3_list_single_op(term)
-			for entry in single_list:
-				base_3_list.append(entry)
+		meta_list = parallel_map(generate_base_3_list_single_op, self.ham_term_list, num_processes = aqua_globals.num_processes)
+		for term_list in meta_list:
+			base_3_list = base_3_list + term_list
 		return base_3_list
-
 
 
 

@@ -9,6 +9,7 @@ from qisresearch.adapt import OperatorPool
 from qiskit.aqua.operators import BaseOperator, WeightedPauliOperator
 from qiskit.tools import parallel_map
 from qiskit.aqua import aqua_globals, QuantumInstance
+import psutil
 
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ def _compute_grad(op, **kwargs):
 
 
 def _commutator(op, hamiltonian=None, gradient_tolerance=None):
-    return 1j * (hamiltonian * op - op * hamiltonian).chop(threshold=gradient_tolerance, copy=True)
+    return 1j * (op * hamiltonian - hamiltonian * op).chop(threshold=gradient_tolerance, copy=True)
 
 
 def multi_circuit_eval(circuit: QuantumCircuit, op_list: List[BaseOperator], qi: QuantumInstance, drop_dups: bool = True):
@@ -89,9 +90,8 @@ def multi_circuit_eval(circuit: QuantumCircuit, op_list: List[BaseOperator], qi:
         _circ_eval,
         op_list,
         task_kwargs={**kwargs, 'wave_function': circuit},
-        num_processes=aqua_globals.num_processes
+        num_processes=len(psutil.Process().cpu_affinity())
     ))
-    print('found total eval circuits')
     total_evaluation_circuits = [item for sublist in total_evaluation_circuits for item in sublist]
     logger.info('Removing duplicate circuits')
     if drop_dups:
@@ -104,7 +104,6 @@ def multi_circuit_eval(circuit: QuantumCircuit, op_list: List[BaseOperator], qi:
         final_circs = deepcopy(total_evaluation_circuits)
     del total_evaluation_circuits
     evals = len(final_circs) #will added
-    print('removed duplicats')
     logger.debug('Executing {} circuits for evaluation...'.format(len(final_circs)))
     result = qi.execute(final_circs)
     logger.debug('Computing {} expectations...'.format(len(op_list)))
@@ -112,9 +111,8 @@ def multi_circuit_eval(circuit: QuantumCircuit, op_list: List[BaseOperator], qi:
         _compute_grad,
         op_list,
         task_kwargs={**kwargs, 'result': result},
-        num_processes=aqua_globals.num_processes
+        num_processes=len(psutil.Process().cpu_affinity())
     ))
-    print('found exp vals')
     logger.debug('Computed expectations: {}'.format(exp_vals))
     return exp_vals, evals #will added
 
@@ -160,7 +158,7 @@ class OperatorSelector:
             _commutator,
             self._operator_pool.pool,
             task_kwargs={'hamiltonian': self._hamiltonian},
-            num_processes=aqua_globals.num_processes
+            num_processes=len(psutil.Process().cpu_affinity())
         ))  # type: List[BaseOperator]
         logger.info('Computed {} commutators'.format(len(self._coms)))
         if all(isinstance(op, WeightedPauliOperator) for op in self._coms):
@@ -217,7 +215,7 @@ class OperatorSelector:
             _circ_eval,
             dcoms,
             task_kwargs={**kwargs, 'wave_function': circuit},
-            num_processes=aqua_globals.num_processes
+            num_processes=len(psutil.Process().cpu_affinity())
         ))
         total_evaluation_circuits = [item for sublist in total_evaluation_circuits for item in sublist]
         logger.info('Removing duplicate circuits')
@@ -250,6 +248,14 @@ class ADAPTOperatorSelector(OperatorSelector):
         grads, stds = list(zip(*grad_list))
         grads = np.abs(np.array(grads))
         max_index = np.argmax(grads)
+        #max_index = np.where(np.array(grads) == np.array(grads).max()) #will added
+        #max_index = max_index[0]
+        #print(max_index)
+        #if len(max_index) > 1:
+        #    entry = np.random.randint(0,len(max_index) - 1)
+        #    max_index = max_index[entry]
+        #else:
+        #    max_index = max_index[0]
         new_op = self._operator_pool.pool[max_index]
         max_grad = grad_list[max_index]
         return current_ops + [new_op]
@@ -314,6 +320,33 @@ class AntiCommutingSelector(OperatorSelector):
             ))
         return result_list
 
+def get_Ha(op, **kwargs):
+    term_list = kwargs['hp']
+    term_e_list = kwargs['he']
+    Ha_energy = 0
+    for i,term in enumerate(term_list):
+        if not term.commute_with(op):
+            Ha_energy = Ha_energy + term_e_list[i][0]
+    return Ha_energy
+
+
+
+
+class Ha_max_OperatorSelector(OperatorSelector):
+
+    def get_new_operator_list(self, term_list, term_e_list, current_ops):
+
+        kwargs = {'hp': term_list, 'he': term_e_list}
+        Ha_max = -10000
+        for i,op in enumerate(self._operator_pool.pool):
+            new_ha = get_Ha(op, **kwargs)
+            if new_ha > Ha_max:
+                Ha_max = new_ha
+                Ha_max_index = i
+                best_op = op
+
+        return current_ops + [best_op]
+
 
 
 class ADAPTQAOAOperatorSelector(ADAPTOperatorSelector):
@@ -322,3 +355,26 @@ class ADAPTQAOAOperatorSelector(ADAPTOperatorSelector):
         list_out = super().get_new_operator_list(grad_list, current_ops, circuit)
         list_out.append(self._hamiltonian)
         return list_out
+
+
+class Approx_Ha_maxOperatorSelector(OperatorSelector):
+
+    def get_new_operator_list(self, term_list, term_e_list, current_ops):
+        num_qubits = self._hamiltonian.num_qubits
+        weight_list = {'X': [0]*num_qubits, 'Y': [0]*num_qubits, 'Z': [0]*num_qubits, 'I': [0]*num_qubits}
+        num_list = {'X': [0]*num_qubits, 'Y': [0]*num_qubits, 'Z': [0]*num_qubits, 'I': [0]*num_qubits}
+        start_p = ''
+        start_w = 0
+        start_q = 0
+        for i,term in enumerate(term_list):
+            for j in range(0,num_qubits):
+                single_p = term.print_details[j]
+                weight_list[single_p][j] = weight_list[single_p][j] + term_e_list[i]
+                num_list[single_p][j] = num_list[single_p][j] + 1 #this won't work, need to keep track of which ones.
+                if weight_list[single_p][j] > start_w:
+                    start_w = weight_list[single_p][j]
+                    start_p = single_p
+                    start_q = j
+
+        initial_op = 'I'*num_qubits
+        initila_op[start_q] = start_p

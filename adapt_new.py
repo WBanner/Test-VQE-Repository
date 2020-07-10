@@ -187,6 +187,7 @@ class ADAPTVQE(IterativeVQE):
             last_result['current_ops'],
             circuit=last_result['current_circuit']
         )
+        print(new_op_list[-1].print_details())
 
         var_form = self.variational_form(new_op_list)
         initial_point = np.concatenate((
@@ -212,6 +213,7 @@ class ADAPTVQE(IterativeVQE):
         result['max_grad'] = max_grad
         result['grad_list'] = grad_list
         result['num op choice evals'] = evals #will added evals
+        print(result['energy'])
 
         if self._compute_hessian:
             hessian = self._operator_selector._hessian(circuit=result['current_circuit'])

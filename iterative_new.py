@@ -143,33 +143,36 @@ class IterativeVQE(QuantumAlgorithm):
     def _first_iteration(self) -> Dict:
         logger.info('Starting iVQE step {}'.format(self.step))
         vqe = VQE(**self.first_vqe_kwargs()) #will edited
-        print('created vqe')
         result = deepcopy(vqe.run(self.quantum_instance))
-        print('finished running vqe')
         result = self.post_process_result(result, vqe, None)
+        result['optimizer_counter'] = 1
         logger.info('Finished iVQE step {}'.format(self.step))
         del vqe
-        print('deleted vqe')
         self.update_step_history(result)
         return 0
 
     def _iteration(self, last_result: Dict) -> Dict:
         logger.info('Starting iVQE step {}'.format(self.step))
         vqe = VQE(**self.next_vqe_kwargs(last_result))
-        print('created vqe')
-        result = vqe.run(self.quantum_instance)
-        print('finished running vqe')
+        result = {'energy': 10000}
+        counter = 0
+        while result['energy'] > last_result['energy'] + 1.1e-10:
+            result = vqe.run(self.quantum_instance)
+            counter = counter + 1
+        result['optimizer_counter'] = counter
         result = self.post_process_result(result, vqe, last_result)
         logger.info('Finished iVQE step {}'.format(self.step))
         self.update_step_history(result)
         del vqe
-        print('deleted vqe')
         return 0
 
     def _run(self) -> Dict:
+        counter = 0
         self._first_iteration()
         while not self.is_converged():
+            print('finished', counter)
             self._iteration(self.last_result)
+            counter = counter + 1
         logger.info('Finished final iVQE step {}'.format(self.step))
         if not self.return_best_result:
             self._optimal_circuit = self.last_result['current_circuit']

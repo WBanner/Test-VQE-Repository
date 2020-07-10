@@ -109,7 +109,7 @@ class ROTOADAPTVQE(IterativeVQE):
             max_evals_grouped=1,
             aux_operators=None,
             auto_conversion=True,
-            initial_parameters: Union[int, float] = 1,
+            initial_parameters: Union[int, float] = 0,
             callback=None,
             step_callbacks=[],
             drop_duplicate_circuits=True,
@@ -192,10 +192,10 @@ class ROTOADAPTVQE(IterativeVQE):
         }
 
     def next_vqe_kwargs(self, last_result) -> Dict:
-        print('new kwargs')
         new_op_info = self._operator_selector.get_new_operator_list(last_result)
         del self._step_history[-1]['roto energy list']
         del self._step_history[-1]['roto parameter list']
+        print('energy', self._step_history[-1]['energy'])
         new_op_list = new_op_info['op list']
 
 
@@ -207,7 +207,9 @@ class ROTOADAPTVQE(IterativeVQE):
             last_result['opt_params'],
             self._new_param
         ))
-        print('finish new kwargs')
+        print('var form ops')
+        for op in var_form._operator_pool:
+            print(op.print_details())
         return {
             'operator': self.hamiltonian,
             'var_form': var_form,
@@ -220,11 +222,9 @@ class ROTOADAPTVQE(IterativeVQE):
         }
 
     def post_process_result(self, result, vqe, last_result) -> Dict: 
-        print('start postprocess')
         result = super().post_process_result(result, vqe, last_result)
         result['current_ops'] = deepcopy(vqe._var_form._operator_pool)
         result['num op choice evals'], result['roto energy list'], result['roto parameter list'] = self._operator_selector.get_energy_param_lists(result)
-        print('post process', self.step)
         if self._compute_hessian:
             hessian = self._operator_selector._hessian(circuit=result['current_circuit'])
         else:
@@ -294,24 +294,23 @@ class ROTOADAPTOperatorSelector(OperatorSelector):
             Generate_roto_op,
             self._operator_pool.pool,
             args,
-            kwargs
+            kwargs, 
+            aqua_globals.num_processes
         ))
-        print('created first op list')
         kwargs['parameter'] = -np.pi/4
         op_list_negpi4 = list(parallel_map(
             Generate_roto_op,
             self._operator_pool.pool,
             args,
-            kwargs
+            kwargs,
+            aqua_globals.num_processes
         ))
-        print('created second op list')
         op_list = op_list_pi4 + op_list_negpi4
         del op_list_pi4
         del op_list_negpi4
         E_list, evals = np.real(multi_circuit_eval(wavefunc, op_list, self.quantum_instance, self._drop_duplicate_circuits))
         del op_list
         E_list, E_list_std = list(zip(*E_list))
-        print('created E list')
         cutoff = int(len(E_list)/2)
         Energy_pi4 = np.array(E_list[0:cutoff])
         Energy_negpi4 = np.array(E_list[cutoff:])
@@ -356,14 +355,11 @@ class ROTOADAPTOperatorSelector(OperatorSelector):
         X = np.sin(B)
         Y = np.sin(B + np.pi/2)
         C = 0.5*(Energy_pi4 + Energy_negpi4)
-        A = (Energy_0 - C)/X #for some reason below didn't work -> ruins previous results? why then did previous results work?
-        """
         for i in range(0,len(Energy_negpi4)):
             if Y[i] != 0:
-                A = np.append(A, (Energy_pi4[i] - C[-1])/Y[i])
+                A = np.append(A, (Energy_pi4[i] - C[i])/Y[i])
             else:
-                A = np.append(A, (Energy_0 - C[-1])/X[i])
-        """
+                A = np.append(A, (Energy_0 - C[i])/X[i])
         Optim_energy_array = C - A
         #print(Optim_energy_array)
         return {'param array': Optim_param_array, 'energy array': Optim_energy_array}
