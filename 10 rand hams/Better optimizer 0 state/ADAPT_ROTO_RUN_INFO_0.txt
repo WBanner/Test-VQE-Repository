@@ -1,0 +1,19 @@
+Exact Energy: -4.961291453546324
+Exact Energy: -4.997724685207997
+Exact Energy: -4.842172347867591
+Exact Energy: -5.187515406988959
+Exact Energy: -4.74845074081543
+Exact Energy: -4.669954848979186
+Exact Energy: -5.352869705236528
+Exact Energy: -4.562414873342995
+Exact Energy: -4.5259155744996455
+Exact Energy: -5.2024310880931095
+Analysis start time: 2020-09-02 12:02:39.935796
+Analysis stop time: 2020-09-03 03:31:50.753874
+Number of qubits: 4
+Number of runs in this set: 10
+Max number of energy steps: 12
+Shots per measurement: 1
+ADAPT enabled
+Optimizer: L_BFGS_B
+num restarts: 4maxfun: 35000maxiter: 35000factr: 1pgtol: 5e-16ADAPTROTO with postprocessing enabled

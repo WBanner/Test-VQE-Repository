@@ -1,0 +1,8 @@
+Exact Energy: -1.0990640886979144
+Analysis start time: 2020-07-30 20:28:07.517398
+Analysis stop time: 2020-07-31 02:20:18.017853
+Number of qubits: 4
+Number of runs in this set: 1
+Max number of energy steps: 20
+Shots per measurement: 1
+ADAPTROTO with postprocessing enabled
