@@ -2,7 +2,7 @@ from scipy import optimize as sciopt
 
 from qiskit.aqua.components.optimizers import Optimizer
 
-from qiskit.aqua.components.optimizers import L_BFGS_B
+from l_bfgs_b_new import L_BFGS_B
 
 
 class BFGS_Grad(L_BFGS_B):
@@ -94,12 +94,10 @@ class BFGS_Grad(L_BFGS_B):
             gradient_function = Optimizer.wrap_function(Optimizer.gradient_num_diff,
                                                         (objective_function,
                                                          epsilon, self._max_evals_grouped))
-
         approx_grad = bool(gradient_function is None)
         sol, opt, info = sciopt.fmin_l_bfgs_b(objective_function,
                                               initial_point, bounds=variable_bounds,
                                               fprime=gradient_function,
                                               approx_grad=approx_grad, **self._options,
                                               pgtol=self._pgtol)
-
         return sol, opt, info['funcalls']

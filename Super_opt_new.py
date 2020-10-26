@@ -1,7 +1,9 @@
-from qiskit.aqua.components.optimizers import Optimizer, COBYLA
+from qiskit.aqua.components.optimizers import COBYLA, L_BFGS_B
+from optimizer_new import Optimizer
 from bfgs_grad_new import BFGS_Grad
 import numpy as np
 from copy import deepcopy
+import matplotlib.pyplot as plt
 from skopt.learning import GaussianProcessRegressor
 from skopt.utils import create_result
 from skopt.space import Space, Real
@@ -9,18 +11,23 @@ from skopt.space import Space, Real
 
 class SuperOptimizer:
     """Create more robust, featureful optimizers for use in Qiskit.
+
     To use this class, simply take an optimizer like `COBYLA` and create
     a class like
     ```
     class SuperCOBYLA(SuperOptimizer, COBYLA):
         pass
     ```
+
     Now you can make an optimizer like `opt = SuperCOBYLA(maxiter=50)`.
     This optimizer now allows automatic restarts by using the keyword argument
     `SuperCOBYLA(maxiter=50, _num_restarts=10)`.
+
     Once an optimization has been run, you can use the `opt.optimization_result`
     attribute with the plotting functions in `skopt`.
+
     https://scikit-optimize.github.io/stable/modules/plots.html#plots
+
     Note that some of the functions in `skopt.plots` require a model. This can
     be created by also supplying the appropriate keyword argument:
     ```
@@ -29,6 +36,7 @@ class SuperOptimizer:
     By default, this will only work if less than 200 points are found in the
     optimization for performance reasons. This can be overridden with 
     `_max_model_points`.
+
     Note that the model here uses Gaussian processes to approximate the rest of
     the objective function. Since an optimizer may not (and generally does not)
     sample lots of parameter space, one should only trust the model to make accurate
@@ -121,16 +129,18 @@ class SuperCOBYLA(SuperOptimizer, COBYLA):
     pass
 
 
-    if __name__ == '__main__':
-        from scipy.optimize import rosen
+if __name__ == '__main__':
+    from scipy.optimize import rosen
 
-        sup_cob = SuperCOBYLA(_num_restarts=1, _make_model=True, maxiter=50)
+    sup_cob = SuperCOBYLA(_num_restarts=1, _make_model=True, maxiter=50)
 
-        result = sup_cob.optimize(3, rosen, initial_point=[0.0, 0.1, 0.2])
+    result = sup_cob.optimize(3, rosen, initial_point=[0.0, 0.1, 0.2])
 
-        print(sup_cob.optimization_result)
-        print(result)
-
+    print(sup_cob.optimization_result)
+    print(result)
 
 class SuperBFGS_Grad(SuperOptimizer, BFGS_Grad):
+    pass
+
+class SuperL_BFGS_B(SuperOptimizer, L_BFGS_B):
     pass

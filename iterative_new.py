@@ -12,7 +12,9 @@ from typing import Dict, List
 from abc import abstractmethod
 from qiskit.aqua import AquaError
 from copy import deepcopy
-from qiskit.aqua.algorithms import QuantumAlgorithm, VQE
+from qiskit.aqua.algorithms import QuantumAlgorithm
+from vqe_edited import VQE
+import time
 
 
 class IterativeVQE(QuantumAlgorithm):
@@ -142,7 +144,7 @@ class IterativeVQE(QuantumAlgorithm):
 
     def _first_iteration(self) -> Dict:
         logger.info('Starting iVQE step {}'.format(self.step))
-        vqe = VQE(**self.first_vqe_kwargs()) #will edited
+        vqe = VQE(**self.first_vqe_kwargs())
         result = deepcopy(vqe.run(self.quantum_instance))
         result = self.post_process_result(result, vqe, None)
         result['optimizer_counter'] = 1
@@ -156,7 +158,7 @@ class IterativeVQE(QuantumAlgorithm):
         vqe = VQE(**self.next_vqe_kwargs(last_result))
         result = {'energy': 10000}
         counter = 0
-        while result['energy'] > last_result['energy'] + 1.1e-10:
+        while result['energy'] > last_result['energy'] + 1.1e-10 and counter < 1:
             result = vqe.run(self.quantum_instance)
             counter = counter + 1
         result['optimizer_counter'] = counter
@@ -169,10 +171,14 @@ class IterativeVQE(QuantumAlgorithm):
     def _run(self) -> Dict:
         counter = 0
         self._first_iteration()
+        print('finished ', 0)
         while not self.is_converged():
-            print('finished', counter)
+            start = time.time()
             self._iteration(self.last_result)
             counter = counter + 1
+            ittime = time.time() - start
+            print('time', ittime)
+            print('finished ', counter)
         logger.info('Finished final iVQE step {}'.format(self.step))
         if not self.return_best_result:
             self._optimal_circuit = self.last_result['current_circuit']

@@ -14,8 +14,9 @@ from qiskit.ignis.mitigation.measurement import CompleteMeasFitter
 from qiskit.providers.aer.noise import NoiseModel
 
 def get_qubit_op(dist):
-    driver = PySCFDriver(atom="Li .0 .0 .0; H .0 .0 " + str(dist), unit=UnitsType.ANGSTROM, 
-                         charge=0, spin=0, basis='sto3g')
+    #atom="Li .0 .0 .0; H .0 .0 " + str(dist)
+    #atom="Be .0 .0 .0; H .0 .0 -" + str(dist) + "; H .0 .0 " + str(dist)
+    driver = PySCFDriver("Li .0 .0 .0; H .0 .0 " + str(dist), unit=UnitsType.ANGSTROM, charge=0, spin=0, basis='sto3g')
     molecule = driver.run()
     freeze_list = [0]
     remove_list = [-3, -2]
